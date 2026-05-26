@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "192084800315",
+    "project_id": "exportflow-75991",
+    "storage_bucket": "exportflow-75991.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:192084800315:android:1f6f8910b9bbf72af5fd1e",
+        "android_client_info": {
+          "package_name": "com.exportflow"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAV1g0VWDJyqeu7iPrB1I7s3nBpympMxAw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
