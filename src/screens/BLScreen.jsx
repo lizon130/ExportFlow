@@ -1,5 +1,5 @@
 // src/screens/BLScreen.js
-import React, {useState, useEffect} from 'react';
+import React, {useEffect, useState} from 'react';
 import {
   View,
   Text,
@@ -12,21 +12,20 @@ import {
   Modal,
 } from 'react-native';
 
+const API_BASE_URL = 'http://192.168.9.45:7000';
+
 const BLScreen = () => {
   const [refreshing, setRefreshing] = useState(false);
 
-  // B/L pending summary states
   const [blSummaryData, setBlSummaryData] = useState([]);
   const [filteredBlData, setFilteredBlData] = useState([]);
   const [blLoading, setBlLoading] = useState(false);
   const [blCurrentPage, setBlCurrentPage] = useState(1);
   const [blItemsPerPage, setBlItemsPerPage] = useState(20);
 
-  // Date filter states
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
 
-  // Modal states for B/L details
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [modalExportData, setModalExportData] = useState([]);
   const [modalFilteredData, setModalFilteredData] = useState([]);
@@ -36,9 +35,6 @@ const BLScreen = () => {
   const [modalItemsPerPage, setModalItemsPerPage] = useState(20);
   const [modalSearchText, setModalSearchText] = useState('');
 
-  const API_BASE_URL = 'http://192.168.9.45:7000';
-
-  // Date picker states
   const [showFromDatePicker, setShowFromDatePicker] = useState(false);
   const [showToDatePicker, setShowToDatePicker] = useState(false);
   const [tempDay, setTempDay] = useState('');
@@ -58,31 +54,19 @@ const BLScreen = () => {
     fetchBlSummary();
   }, []);
 
-  // Keep modal page inside valid range whenever search/data/rows change.
-  // This fixes modal pagination not updating or landing on an empty page.
   useEffect(() => {
-    const safeLength = Array.isArray(modalFilteredData)
-      ? modalFilteredData.length
-      : 0;
-    const safeTotalPages = Math.max(
+    const totalPages = Math.max(
       1,
-      Math.ceil(safeLength / modalItemsPerPage),
+      Math.ceil(modalFilteredData.length / modalItemsPerPage),
     );
-
-    if (modalCurrentPage > safeTotalPages) {
-      setModalCurrentPage(safeTotalPages);
+    if (modalCurrentPage > totalPages) {
+      setModalCurrentPage(totalPages);
     }
   }, [modalFilteredData, modalItemsPerPage, modalCurrentPage]);
 
   const normalizeArray = data => {
-    if (Array.isArray(data)) {
-      return data;
-    }
-
-    if (data && typeof data === 'object') {
-      return [data];
-    }
-
+    if (Array.isArray(data)) return data;
+    if (data && typeof data === 'object') return [data];
     return [];
   };
 
@@ -97,7 +81,9 @@ const BLScreen = () => {
       `toDate=${encodeURIComponent(selectedToDate || '')}`,
     ];
 
-    return `${API_BASE_URL}/api/Export/by-dept-Bl_DateList?${params.join('&')}`;
+    return `${API_BASE_URL}/api/Export/Get-By-Dept-Bl-Date-List?${params.join(
+      '&',
+    )}`;
   };
 
   const fetchBlSummary = async () => {
@@ -105,7 +91,7 @@ const BLScreen = () => {
 
     try {
       const response = await fetch(
-        `${API_BASE_URL}/api/Export/GetBy_DepartmentName_Wise_ExpoDoc_Completed_Total_Count`,
+        `${API_BASE_URL}/api/Export/Get-Pending-BL-Date-Count`,
         {
           method: 'GET',
           headers: {
@@ -121,8 +107,22 @@ const BLScreen = () => {
 
       const data = await response.json();
       const dataArray = normalizeArray(data);
+
+      // New API returns department-wise B/L pending rows.
+      // Show one card per department where pendingBLDateCount > 0.
       const pendingBlDepartments = dataArray
-        .filter(item => (item?.pendingBL || 0) > 0)
+        .filter(item => (item?.pendingBLDateCount || 0) > 0)
+        .map(item => ({
+          ...item,
+
+          // IMPORTANT: map new API field to old UI field
+          pendingBL: item?.pendingBLDateCount || 0,
+
+          customerName: item?.customerName || item?.departmentName || 'Unknown',
+          departmentName: item?.departmentName || item?.departmentCode || '-',
+          departmentCode: item?.departmentCode || '',
+          totalValue: item?.totalValue || 0,
+        }))
         .sort((a, b) => (b?.pendingBL || 0) - (a?.pendingBL || 0));
 
       setBlSummaryData(pendingBlDepartments);
@@ -139,128 +139,86 @@ const BLScreen = () => {
   };
 
   const parseDateString = dateStr => {
-    if (!dateStr) {
-      return null;
-    }
-
+    if (!dateStr) return null;
     const parts = dateStr.split('-');
-    if (parts.length === 3) {
-      return new Date(parts[2], parts[1] - 1, parts[0]);
-    }
-
-    return null;
+    if (parts.length !== 3) return null;
+    return new Date(parts[2], parts[1] - 1, parts[0]);
   };
 
   const getDateOnly = date => {
-    if (!date || Number.isNaN(date.getTime())) {
-      return null;
-    }
-
+    if (!date || Number.isNaN(date.getTime())) return null;
     return new Date(date.getFullYear(), date.getMonth(), date.getDate());
   };
 
   const filterBySelectedDates = data => {
-    if (!Array.isArray(data)) {
-      return [];
-    }
+    if (!Array.isArray(data)) return [];
 
     const fromDateObj = getDateOnly(parseDateString(fromDate));
     const toDateObj = getDateOnly(parseDateString(toDate));
 
-    if (!fromDateObj && !toDateObj) {
-      return data;
-    }
+    if (!fromDateObj && !toDateObj) return data;
 
     return data.filter(item => {
-      if (!item?.exFacDate) {
-        return false;
-      }
-
+      if (!item?.exFacDate) return false;
       const itemDate = getDateOnly(new Date(item.exFacDate));
-
-      if (!itemDate) {
-        return false;
-      }
-
-      if (fromDateObj && itemDate < fromDateObj) {
-        return false;
-      }
-
-      if (toDateObj && itemDate > toDateObj) {
-        return false;
-      }
-
+      if (!itemDate) return false;
+      if (fromDateObj && itemDate < fromDateObj) return false;
+      if (toDateObj && itemDate > toDateObj) return false;
       return true;
     });
   };
 
   const filterDataBySearch = (data, text) => {
-    if (!text || !Array.isArray(data)) {
-      return data;
-    }
+    if (!text || !Array.isArray(data)) return data;
 
     const searchLower = text.toLowerCase();
 
     return data.filter(
       item =>
-        (item.expDocumentNo &&
-          item.expDocumentNo.toString().toLowerCase().includes(searchLower)) ||
-        (item.customerName &&
-          item.customerName.toLowerCase().includes(searchLower)) ||
-        (item.departmentName &&
-          item.departmentName.toLowerCase().includes(searchLower)) ||
-        (item.noOfPcs &&
-          item.noOfPcs.toString().toLowerCase().includes(searchLower)) ||
-        (item.totalValue &&
-          item.totalValue.toString().toLowerCase().includes(searchLower)),
+        item.expDocumentNo?.toString().toLowerCase().includes(searchLower) ||
+        item.customerName?.toLowerCase().includes(searchLower) ||
+        item.departmentName?.toLowerCase().includes(searchLower) ||
+        item.noOfPcs?.toString().toLowerCase().includes(searchLower) ||
+        item.totalValue?.toString().toLowerCase().includes(searchLower),
     );
   };
 
   const fetchModalExportData = async item => {
     const deptCode = item?.departmentCode || '';
-    const deptName = getDisplayName(item);
+    const deptName =
+      item?.customerName && item?.departmentName
+        ? `${item.customerName} • ${item.departmentName}`
+        : getDisplayName(item);
 
     setModalLoading(true);
     setModalSearchText('');
     setModalCurrentPage(1);
     setModalDepartmentName(deptName);
+    setShowDetailsModal(true);
 
     try {
-      let dataArray = [];
+      const response = await fetch(getBlListUrl(deptCode, fromDate, toDate), {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+      });
 
-      if (deptCode) {
-        const response = await fetch(getBlListUrl(deptCode, fromDate, toDate), {
-          method: 'GET',
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-          },
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const data = await response.json();
-        dataArray = normalizeArray(data);
-      } else {
-        dataArray = Array.isArray(item?.records) ? item.records : [];
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
 
+      const data = await response.json();
+      const dataArray = normalizeArray(data);
       const dateFilteredArray = filterBySelectedDates(dataArray);
 
       setModalExportData(dateFilteredArray);
       setModalFilteredData(dateFilteredArray);
-      setShowDetailsModal(true);
     } catch (error) {
       console.error('Fetch B/L modal error:', error);
-      const fallbackArray = filterBySelectedDates(
-        Array.isArray(item?.records) ? item.records : [],
-      );
-
-      setModalExportData(fallbackArray);
-      setModalFilteredData(fallbackArray);
-      setShowDetailsModal(true);
+      setModalExportData([]);
+      setModalFilteredData([]);
     } finally {
       setModalLoading(false);
     }
@@ -269,12 +227,6 @@ const BLScreen = () => {
   const handleModalSearch = text => {
     setModalSearchText(text);
     setModalCurrentPage(1);
-
-    if (!Array.isArray(modalExportData)) {
-      setModalFilteredData([]);
-      return;
-    }
-
     setModalFilteredData(filterDataBySearch(modalExportData, text));
   };
 
@@ -292,30 +244,26 @@ const BLScreen = () => {
       setTempYear('');
     }
 
-    if (type === 'from') {
-      setShowFromDatePicker(true);
-    } else {
-      setShowToDatePicker(true);
-    }
+    type === 'from' ? setShowFromDatePicker(true) : setShowToDatePicker(true);
   };
 
   const confirmDate = () => {
-    if (tempDay && tempMonth && tempYear) {
-      const formattedDate = `${tempDay}-${tempMonth}-${tempYear}`;
+    if (!tempDay || !tempMonth || !tempYear) return;
 
-      if (pickerType === 'from') {
-        setFromDate(formattedDate);
-        setShowFromDatePicker(false);
-      } else {
-        setToDate(formattedDate);
-        setShowToDatePicker(false);
-      }
+    const formattedDate = `${tempDay}-${tempMonth}-${tempYear}`;
+
+    if (pickerType === 'from') {
+      setFromDate(formattedDate);
+      setShowFromDatePicker(false);
+    } else {
+      setToDate(formattedDate);
+      setShowToDatePicker(false);
     }
   };
 
   const onRefresh = () => {
     setRefreshing(true);
-    fetchBlSummary().then(() => setRefreshing(false));
+    fetchBlSummary().finally(() => setRefreshing(false));
   };
 
   const blSafeFilteredData = Array.isArray(filteredBlData)
@@ -349,7 +297,6 @@ const BLScreen = () => {
     blSafeFilteredData.length > 0
       ? Math.max(...blSafeFilteredData.map(item => item?.pendingBL || 0))
       : 0;
-
   const sortedPendingData = [...blSafeFilteredData].sort(
     (a, b) => (b?.pendingBL || 0) - (a?.pendingBL || 0),
   );
@@ -368,7 +315,6 @@ const BLScreen = () => {
     '#ef4444',
     '#14b8a6',
   ];
-
   const cardSoftColors = [
     'rgba(139,92,246,0.18)',
     'rgba(245,158,11,0.18)',
@@ -379,30 +325,21 @@ const BLScreen = () => {
     'rgba(239,68,68,0.18)',
     'rgba(20,184,166,0.18)',
   ];
-
   const cardIcons = ['🚢', '📦', '🏬', '📄', '🛒', '🏭', '🧾', '⚓'];
 
   const getDisplayName = item =>
     item?.customerName || item?.departmentName || 'Unknown';
-
   const getDepartmentSubText = item =>
     item?.departmentName || item?.departmentCode || '-';
 
   const getPendingPercentage = pending => {
-    if (!maxPending || maxPending <= 0) {
-      return 0;
-    }
-
+    if (!maxPending || maxPending <= 0) return 0;
     return Math.min(100, Math.round((pending / maxPending) * 100));
   };
 
   const getProgressWidth = pending => {
     const percentage = getPendingPercentage(pending);
-
-    if (percentage === 0) {
-      return '8%';
-    }
-
+    if (percentage === 0) return '8%';
     return `${Math.max(8, percentage)}%`;
   };
 
@@ -435,64 +372,24 @@ const BLScreen = () => {
     };
   };
 
-  const getBlPageNumbers = () => {
+  const getPageNumbers = (currentPage, totalPages) => {
     const pageNumbers = [];
     const maxVisiblePages = 5;
-    let startPage = Math.max(
-      1,
-      blCurrentPage - Math.floor(maxVisiblePages / 2),
-    );
-    let endPage = Math.min(blTotalPages, startPage + maxVisiblePages - 1);
+    let startPage = Math.max(1, currentPage - Math.floor(maxVisiblePages / 2));
+    let endPage = Math.min(totalPages, startPage + maxVisiblePages - 1);
 
     if (endPage - startPage + 1 < maxVisiblePages) {
       startPage = Math.max(1, endPage - maxVisiblePages + 1);
     }
 
-    for (let i = startPage; i <= endPage; i++) {
-      pageNumbers.push(i);
-    }
-
+    for (let i = startPage; i <= endPage; i++) pageNumbers.push(i);
     return pageNumbers;
-  };
-
-  const getModalPageNumbers = () => {
-    const pageNumbers = [];
-    const maxVisiblePages = 5;
-    let startPage = Math.max(
-      1,
-      modalCurrentPage - Math.floor(maxVisiblePages / 2),
-    );
-    let endPage = Math.min(modalTotalPages, startPage + maxVisiblePages - 1);
-
-    if (endPage - startPage + 1 < maxVisiblePages) {
-      startPage = Math.max(1, endPage - maxVisiblePages + 1);
-    }
-
-    for (let i = startPage; i <= endPage; i++) {
-      pageNumbers.push(i);
-    }
-
-    return pageNumbers;
-  };
-
-  const goToPrevModalPage = () => {
-    setModalCurrentPage(page => Math.max(1, page - 1));
-  };
-
-  const goToNextModalPage = () => {
-    setModalCurrentPage(page => Math.min(modalTotalPages, page + 1));
-  };
-
-  const goToModalPage = page => {
-    setModalCurrentPage(Math.max(1, Math.min(modalTotalPages, page)));
   };
 
   const renderBlPagination = () => {
-    if (blTotalPages <= 1) {
-      return null;
-    }
+    if (blTotalPages <= 1) return null;
 
-    const pageNumbers = getBlPageNumbers();
+    const pageNumbers = getPageNumbers(blCurrentPage, blTotalPages);
     const startItem = (blCurrentPage - 1) * blItemsPerPage + 1;
     const endItem = Math.min(
       blCurrentPage * blItemsPerPage,
@@ -501,12 +398,9 @@ const BLScreen = () => {
 
     return (
       <View style={styles.buyerPaginationContainer}>
-        <View style={styles.buyerPaginationInfo}>
-          <Text style={styles.buyerPaginationInfoText}>
-            {startItem}-{endItem} of {blSafeFilteredData.length}
-          </Text>
-        </View>
-
+        <Text style={styles.buyerPaginationInfoText}>
+          {startItem}-{endItem} of {blSafeFilteredData.length}
+        </Text>
         <View style={styles.buyerPaginationControls}>
           <TouchableOpacity
             style={[
@@ -517,7 +411,6 @@ const BLScreen = () => {
             disabled={blCurrentPage === 1}>
             <Text style={styles.buyerPaginationButtonText}>◀</Text>
           </TouchableOpacity>
-
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -542,7 +435,6 @@ const BLScreen = () => {
               </TouchableOpacity>
             ))}
           </ScrollView>
-
           <TouchableOpacity
             style={[
               styles.buyerPaginationButton,
@@ -556,30 +448,25 @@ const BLScreen = () => {
             <Text style={styles.buyerPaginationButtonText}>▶</Text>
           </TouchableOpacity>
         </View>
-
-        <View style={styles.buyerItemsPerPageContainer}>
-          <TouchableOpacity
-            style={styles.buyerItemsPerPageSelector}
-            onPress={() => {
-              const newItemsPerPage =
-                blItemsPerPage === 20 ? 50 : blItemsPerPage === 50 ? 100 : 20;
-              setBlItemsPerPage(newItemsPerPage);
-              setBlCurrentPage(1);
-            }}>
-            <Text style={styles.buyerItemsPerPageText}>{blItemsPerPage}</Text>
-            <Text style={styles.buyerItemsPerPageIcon}>▼</Text>
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity
+          style={styles.buyerItemsPerPageSelector}
+          onPress={() => {
+            const newItemsPerPage =
+              blItemsPerPage === 20 ? 50 : blItemsPerPage === 50 ? 100 : 20;
+            setBlItemsPerPage(newItemsPerPage);
+            setBlCurrentPage(1);
+          }}>
+          <Text style={styles.buyerItemsPerPageText}>{blItemsPerPage}</Text>
+          <Text style={styles.buyerItemsPerPageIcon}>▼</Text>
+        </TouchableOpacity>
       </View>
     );
   };
 
   const renderModalPagination = () => {
-    if (modalSafeFilteredData.length <= modalItemsPerPage) {
-      return null;
-    }
+    if (modalSafeFilteredData.length <= modalItemsPerPage) return null;
 
-    const pageNumbers = getModalPageNumbers();
+    const pageNumbers = getPageNumbers(modalCurrentPage, modalTotalPages);
     const startItem = (modalCurrentPage - 1) * modalItemsPerPage + 1;
     const endItem = Math.min(
       modalCurrentPage * modalItemsPerPage,
@@ -588,20 +475,17 @@ const BLScreen = () => {
 
     return (
       <View style={styles.paginationContainer}>
-        <View style={styles.paginationInfo}>
-          <Text style={styles.paginationInfoText}>
-            Showing {startItem} - {endItem} of {modalSafeFilteredData.length}{' '}
-            records
-          </Text>
-        </View>
-
+        <Text style={styles.paginationInfoText}>
+          Showing {startItem} - {endItem} of {modalSafeFilteredData.length}{' '}
+          records
+        </Text>
         <View style={styles.paginationControls}>
           <TouchableOpacity
             style={[
               styles.paginationButton,
               modalCurrentPage === 1 && styles.paginationButtonDisabled,
             ]}
-            onPress={goToPrevModalPage}
+            onPress={() => setModalCurrentPage(page => Math.max(1, page - 1))}
             disabled={modalCurrentPage === 1}>
             <Text
               style={[
@@ -611,7 +495,6 @@ const BLScreen = () => {
               Previous
             </Text>
           </TouchableOpacity>
-
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -623,7 +506,7 @@ const BLScreen = () => {
                   styles.pageNumberButton,
                   modalCurrentPage === pageNum && styles.pageNumberButtonActive,
                 ]}
-                onPress={() => goToModalPage(pageNum)}>
+                onPress={() => setModalCurrentPage(pageNum)}>
                 <Text
                   style={[
                     styles.pageNumberText,
@@ -634,14 +517,15 @@ const BLScreen = () => {
               </TouchableOpacity>
             ))}
           </ScrollView>
-
           <TouchableOpacity
             style={[
               styles.paginationButton,
               modalCurrentPage === modalTotalPages &&
                 styles.paginationButtonDisabled,
             ]}
-            onPress={goToNextModalPage}
+            onPress={() =>
+              setModalCurrentPage(page => Math.min(modalTotalPages, page + 1))
+            }
             disabled={modalCurrentPage === modalTotalPages}>
             <Text
               style={[
@@ -653,7 +537,6 @@ const BLScreen = () => {
             </Text>
           </TouchableOpacity>
         </View>
-
         <View style={styles.itemsPerPageContainer}>
           <Text style={styles.itemsPerPageLabel}>Rows per page:</Text>
           <TouchableOpacity
@@ -681,7 +564,6 @@ const BLScreen = () => {
       <View style={styles.modalOverlay}>
         <View style={styles.datePickerModal}>
           <Text style={styles.datePickerTitle}>{title}</Text>
-
           <View style={styles.datePickerColumns}>
             <View style={styles.datePickerColumn}>
               <Text style={styles.datePickerLabel}>Day</Text>
@@ -707,7 +589,6 @@ const BLScreen = () => {
                 ))}
               </ScrollView>
             </View>
-
             <View style={styles.datePickerColumn}>
               <Text style={styles.datePickerLabel}>Month</Text>
               <ScrollView
@@ -733,7 +614,6 @@ const BLScreen = () => {
                 ))}
               </ScrollView>
             </View>
-
             <View style={styles.datePickerColumn}>
               <Text style={styles.datePickerLabel}>Year</Text>
               <ScrollView
@@ -759,7 +639,6 @@ const BLScreen = () => {
               </ScrollView>
             </View>
           </View>
-
           <View style={styles.datePickerButtons}>
             <TouchableOpacity style={styles.datePickerCancel} onPress={onClose}>
               <Text style={styles.datePickerCancelText}>Cancel</Text>
@@ -799,7 +678,6 @@ const BLScreen = () => {
                 </Text>
               </View>
             </View>
-
             <TouchableOpacity
               activeOpacity={0.8}
               style={styles.modalCloseCircle}
@@ -857,155 +735,68 @@ const BLScreen = () => {
             </View>
           ) : modalCurrentPageData.length > 0 ? (
             <View style={styles.modalBodyContent}>
-              <View style={styles.modalTableShell}>
+              <View style={styles.compactTableShell}>
+                <View style={styles.compactTableHeader}>
+                  <View
+                    style={[styles.compactHeaderCell, styles.compactDocCol]}>
+                    <Text style={styles.compactHeaderText}>Document</Text>
+                  </View>
+                  <View
+                    style={[styles.compactHeaderCell, styles.compactValueCol]}>
+                    <Text style={styles.compactHeaderText}>Value / Pcs</Text>
+                  </View>
+                  <View
+                    style={[styles.compactHeaderCell, styles.compactDateCol]}>
+                    <Text style={styles.compactHeaderText}>Ex-Factory</Text>
+                  </View>
+                </View>
                 <ScrollView
-                  style={styles.modalTableVerticalScroll}
-                  contentContainerStyle={styles.modalTableScrollContent}
-                  nestedScrollEnabled={true}
+                  style={styles.compactTableScroll}
+                  nestedScrollEnabled
                   keyboardShouldPersistTaps="handled"
-                  showsVerticalScrollIndicator={true}>
-                  <ScrollView
-                    horizontal
-                    nestedScrollEnabled={true}
-                    keyboardShouldPersistTaps="handled"
-                    showsHorizontalScrollIndicator={true}>
-                    <View>
+                  showsVerticalScrollIndicator>
+                  {modalCurrentPageData.map((item, index) => (
+                    <View
+                      key={`${item?.expDocumentNo || index}-${index}`}
+                      style={[
+                        styles.compactTableRow,
+                        index % 2 === 0 && styles.compactTableRowAlt,
+                      ]}>
                       <View
-                        style={[styles.tableHeader, styles.modalTableHeader]}>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 70},
-                          ]}>
-                          Sl No
+                        style={[styles.compactBodyCell, styles.compactDocCol]}>
+                        <Text style={styles.compactDocNo} numberOfLines={1}>
+                          {item.expDocumentNo || item.packagingListNo || '-'}
                         </Text>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 150},
-                          ]}>
-                          Export Doc No
-                        </Text>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 190},
-                          ]}>
-                          Customer/Dept
-                        </Text>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 112},
-                          ]}>
-                          Value/Pieces
-                        </Text>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 125},
-                          ]}>
-                          Ex-Factory Date
+                        <Text style={styles.compactDeptName} numberOfLines={1}>
+                          {item.departmentName || item.customerName || '-'}
                         </Text>
                       </View>
-
-                      {modalCurrentPageData.map((item, index) => (
-                        <View
-                          key={`${item?.expDocumentNo || index}-${index}`}
-                          style={[
-                            styles.tableRow,
-                            styles.modalTableRow,
-                            index % 2 === 0 && styles.modalTableRowAlt,
-                          ]}>
-                          <Text
-                            style={[
-                              styles.rowText,
-                              styles.modalRowText,
-                              styles.modalSerialCell,
-                              {width: 70},
-                            ]}>
-                            {(modalCurrentPage - 1) * modalItemsPerPage +
-                              index +
-                              1}
-                          </Text>
-
-                          <Text
-                            style={[
-                              styles.rowText,
-                              styles.modalPackingText,
-                              {width: 150},
-                            ]}
-                            numberOfLines={1}>
-                            {item.expDocumentNo || '-'}
-                          </Text>
-
-                          <View
-                            style={[
-                              styles.columnStack,
-                              styles.modalColumnStack,
-                              {width: 190},
-                            ]}>
-                            <Text
-                              style={styles.modalUpperText}
-                              numberOfLines={1}>
-                              {item.customerName || '-'}
-                            </Text>
-                            <Text
-                              style={styles.modalLowerText}
-                              numberOfLines={1}>
-                              {item.departmentName || '-'}
-                            </Text>
-                          </View>
-
-                          <View
-                            style={[
-                              styles.columnStack,
-                              styles.modalColumnStack,
-                              {width: 112},
-                            ]}>
-                            <Text
-                              style={[
-                                styles.modalUpperText,
-                                styles.modalValueText,
-                              ]}
-                              numberOfLines={1}>
-                              {item.totalValue
-                                ? item.totalValue.toLocaleString()
-                                : '0'}
-                            </Text>
-                            <Text
-                              style={styles.modalLowerText}
-                              numberOfLines={1}>
-                              {item.noOfPcs
-                                ? item.noOfPcs.toLocaleString()
-                                : '0'}{' '}
-                              pcs
-                            </Text>
-                          </View>
-
-                          <Text
-                            style={[
-                              styles.rowText,
-                              styles.modalDateCell,
-                              {width: 125},
-                            ]}
-                            numberOfLines={1}>
-                            {item.exFacDate
-                              ? item.exFacDate.split('T')[0]
-                              : '-'}
-                          </Text>
-                        </View>
-                      ))}
+                      <View
+                        style={[
+                          styles.compactBodyCell,
+                          styles.compactValueCol,
+                        ]}>
+                        <Text style={styles.compactValueText} numberOfLines={1}>
+                          $
+                          {item.totalValue
+                            ? item.totalValue.toLocaleString()
+                            : '0'}
+                        </Text>
+                        <Text style={styles.compactPcsText} numberOfLines={1}>
+                          {item.noOfPcs ? item.noOfPcs.toLocaleString() : '0'}{' '}
+                          pcs
+                        </Text>
+                      </View>
+                      <View
+                        style={[styles.compactBodyCell, styles.compactDateCol]}>
+                        <Text style={styles.compactDateText} numberOfLines={2}>
+                          {item.exFacDate ? item.exFacDate.split('T')[0] : '-'}
+                        </Text>
+                      </View>
                     </View>
-                  </ScrollView>
+                  ))}
                 </ScrollView>
               </View>
-
               {renderModalPagination()}
             </View>
           ) : (
@@ -1030,7 +821,6 @@ const BLScreen = () => {
       refreshControl={
         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
       }>
-      {/* Premium Date Filter */}
       <View style={styles.filterPanel}>
         <View style={styles.filterPanelHeader}>
           <View>
@@ -1043,7 +833,6 @@ const BLScreen = () => {
             <Text style={styles.filterPanelIcon}>BL</Text>
           </View>
         </View>
-
         <View style={styles.dateContainer}>
           <View style={styles.dateBox}>
             <Text style={styles.sectionLabel}>From Date</Text>
@@ -1066,7 +855,6 @@ const BLScreen = () => {
                   {fromDate || 'DD-MM-YYYY'}
                 </Text>
               </View>
-
               {fromDate !== '' ? (
                 <TouchableOpacity
                   onPress={() => setFromDate('')}
@@ -1078,7 +866,6 @@ const BLScreen = () => {
               )}
             </TouchableOpacity>
           </View>
-
           <View style={styles.dateBox}>
             <Text style={styles.sectionLabel}>To Date</Text>
             <TouchableOpacity
@@ -1100,7 +887,6 @@ const BLScreen = () => {
                   {toDate || 'DD-MM-YYYY'}
                 </Text>
               </View>
-
               {toDate !== '' ? (
                 <TouchableOpacity
                   onPress={() => setToDate('')}
@@ -1142,7 +928,6 @@ const BLScreen = () => {
         </View>
       )}
 
-      {/* ========== B/L PENDING SUMMARY ========== */}
       <View style={styles.buyerSummarySection}>
         <View style={styles.summaryHeaderRow}>
           <View>
@@ -1151,7 +936,6 @@ const BLScreen = () => {
               Overview by active department
             </Text>
           </View>
-
           <View style={styles.summaryHeaderPill}>
             <Text style={styles.summaryHeaderPillText}>
               {totalDepartmentCount} Depts
@@ -1164,7 +948,6 @@ const BLScreen = () => {
             <View style={styles.statAccentBlue} />
             <View style={styles.statGlowBlue} />
             <View style={styles.statDecorRing} />
-
             <View style={styles.statTopRow}>
               <View
                 style={[
@@ -1173,24 +956,19 @@ const BLScreen = () => {
                 ]}>
                 <Text style={styles.statIcon}>🏢</Text>
               </View>
-
               <View style={styles.statMiniBadge}>
                 <Text style={styles.statMiniBadgeText}>Active</Text>
               </View>
             </View>
-
             <Text style={styles.statValue}>{totalDepartmentCount}</Text>
             <Text style={styles.statTitle}>Departments</Text>
-            <Text style={styles.statSubLabel}>
-              Available active departments
-            </Text>
+            <Text style={styles.statSubLabel}>Departments with pending B/L</Text>
           </View>
 
           <View style={[styles.statCardPremium, styles.totalDocsStatCard]}>
             <View style={styles.statAccentGreen} />
             <View style={styles.statGlowGreen} />
             <View style={styles.statDecorRing} />
-
             <View style={styles.statTopRow}>
               <View
                 style={[
@@ -1199,17 +977,13 @@ const BLScreen = () => {
                 ]}>
                 <Text style={styles.statIcon}>🚢</Text>
               </View>
-
               <View style={[styles.statMiniBadge, styles.statMiniBadgeGreen]}>
                 <Text style={styles.statMiniBadgeText}>Pending</Text>
               </View>
             </View>
-
             <Text style={styles.statValue}>{totalPendingBl}</Text>
             <Text style={styles.statTitle}>Total Pending B/L</Text>
-            <Text style={styles.statSubLabel}>
-              Pending B/L across departments
-            </Text>
+            <Text style={styles.statSubLabel}>Pending B/L date count</Text>
           </View>
         </View>
 
@@ -1230,7 +1004,6 @@ const BLScreen = () => {
                   {getDepartmentSubText(highestPendingItem)}
                 </Text>
               </View>
-
               <View
                 style={[styles.pendingInsightCount, styles.pendingHighCount]}>
                 <Text style={styles.pendingInsightCountText}>
@@ -1255,7 +1028,6 @@ const BLScreen = () => {
                   {getDepartmentSubText(lowestPendingItem)}
                 </Text>
               </View>
-
               <View
                 style={[styles.pendingInsightCount, styles.pendingLowCount]}>
                 <Text style={styles.pendingInsightCountText}>
@@ -1307,7 +1079,6 @@ const BLScreen = () => {
                         {backgroundColor: softColor},
                       ]}
                     />
-
                     <View style={styles.badgeHeader}>
                       <View style={styles.badgeLeftSection}>
                         <View
@@ -1317,7 +1088,6 @@ const BLScreen = () => {
                           ]}>
                           <Text style={styles.badgeIcon}>{icon}</Text>
                         </View>
-
                         <View style={styles.badgeTitleSection}>
                           <Text style={styles.badgeBuyerName} numberOfLines={2}>
                             {getDisplayName(item)}
@@ -1328,7 +1098,6 @@ const BLScreen = () => {
                         </View>
                       </View>
                     </View>
-
                     <View style={styles.progressRow}>
                       <View style={styles.progressTrack}>
                         <View
@@ -1343,7 +1112,6 @@ const BLScreen = () => {
                       </View>
                       <Text style={styles.progressPercent}>{percentage}%</Text>
                     </View>
-
                     <View style={styles.badgeFooter}>
                       <View
                         style={[
@@ -1354,7 +1122,6 @@ const BLScreen = () => {
                           Pending: {pending}
                         </Text>
                       </View>
-
                       <View style={styles.badgeFooterRight}>
                         <View
                           style={[
@@ -1379,7 +1146,6 @@ const BLScreen = () => {
                 );
               })}
             </View>
-
             {renderBlPagination()}
           </>
         ) : (
@@ -1387,7 +1153,7 @@ const BLScreen = () => {
             <Text style={styles.emptyStateIcon}>✅</Text>
             <Text style={styles.emptyStateText}>No pending B/L found</Text>
             <Text style={styles.emptyStateSubText}>
-              All departments are up to date
+              All B/L dates are up to date
             </Text>
           </View>
         )}
@@ -1403,19 +1169,13 @@ const BLScreen = () => {
         () => setShowToDatePicker(false),
         'Select To Date',
       )}
-
       {renderDetailsModal()}
     </ScrollView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0a0c12',
-  },
-
-  // ========== FILTER PANEL ==========
+  container: {flex: 1, backgroundColor: '#0a0c12'},
   filterPanel: {
     marginHorizontal: 12,
     marginTop: 10,
@@ -1437,16 +1197,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 14,
   },
-  filterPanelTitle: {
-    color: '#ffffff',
-    fontSize: 18,
-    fontWeight: '900',
-  },
-  filterPanelSubTitle: {
-    color: '#94a3b8',
-    fontSize: 11,
-    marginTop: 3,
-  },
+  filterPanelTitle: {color: '#ffffff', fontSize: 18, fontWeight: '900'},
+  filterPanelSubTitle: {color: '#94a3b8', fontSize: 11, marginTop: 3},
   filterPanelIconBox: {
     width: 40,
     height: 40,
@@ -1455,18 +1207,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  filterPanelIcon: {
-    color: '#93c5fd',
-    fontSize: 13,
-    fontWeight: '900',
-  },
-  dateContainer: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  dateBox: {
-    flex: 1,
-  },
+  filterPanelIcon: {color: '#93c5fd', fontSize: 13, fontWeight: '900'},
+  dateContainer: {flexDirection: 'row', gap: 10},
+  dateBox: {flex: 1},
   sectionLabel: {
     fontSize: 11,
     fontWeight: '700',
@@ -1486,40 +1229,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(148,163,184,0.18)',
   },
-  activeDateInput: {
-    borderColor: '#3b82f6',
-    backgroundColor: '#111c35',
-  },
-  dateValueRow: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  dateIcon: {
-    fontSize: 15,
-    marginRight: 7,
-  },
-  dateValue: {
-    flex: 1,
-    color: '#f8fafc',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  activeDateText: {
-    color: '#ffffff',
-  },
-  placeholderText: {
-    color: '#64748b',
-  },
-  clearDateBtn: {
-    paddingHorizontal: 5,
-    paddingVertical: 3,
-  },
-  clearDateText: {
-    color: '#ec4899',
-    fontSize: 13,
-    fontWeight: '900',
-  },
+  activeDateInput: {borderColor: '#3b82f6', backgroundColor: '#111c35'},
+  dateValueRow: {flex: 1, flexDirection: 'row', alignItems: 'center'},
+  dateIcon: {fontSize: 15, marginRight: 7},
+  dateValue: {flex: 1, color: '#f8fafc', fontSize: 12, fontWeight: '700'},
+  activeDateText: {color: '#ffffff'},
+  placeholderText: {color: '#64748b'},
+  clearDateBtn: {paddingHorizontal: 5, paddingVertical: 3},
+  clearDateText: {color: '#ec4899', fontSize: 13, fontWeight: '900'},
   dateChevron: {
     color: '#94a3b8',
     fontSize: 18,
@@ -1533,13 +1250,8 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     gap: 8,
   },
-  activeFiltersLabel: {
-    fontSize: 9,
-    color: '#94a3b8',
-  },
-  filtersScroll: {
-    flex: 1,
-  },
+  activeFiltersLabel: {fontSize: 9, color: '#94a3b8'},
+  filtersScroll: {flex: 1},
   filterBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1550,19 +1262,13 @@ const styles = StyleSheet.create({
     marginRight: 6,
     gap: 4,
   },
-  filterBadgeText: {
-    fontSize: 10,
-    color: 'white',
-    fontWeight: '800',
-  },
+  filterBadgeText: {fontSize: 10, color: 'white', fontWeight: '800'},
   filterBadgeClose: {
     fontSize: 12,
     color: 'white',
     fontWeight: '900',
     marginLeft: 4,
   },
-
-  // ========== PENDING SUMMARY ==========
   buyerSummarySection: {
     backgroundColor: '#0f111a',
     paddingTop: 6,
@@ -1576,16 +1282,8 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 14,
   },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: '#f8fafc',
-  },
-  summaryHeaderSubText: {
-    fontSize: 12,
-    color: '#94a3b8',
-    marginTop: 4,
-  },
+  sectionTitle: {fontSize: 20, fontWeight: '900', color: '#f8fafc'},
+  summaryHeaderSubText: {fontSize: 12, color: '#94a3b8', marginTop: 4},
   summaryHeaderPill: {
     backgroundColor: 'rgba(59,130,246,0.16)',
     borderWidth: 1,
@@ -1594,11 +1292,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 999,
   },
-  summaryHeaderPillText: {
-    color: '#93c5fd',
-    fontSize: 11,
-    fontWeight: '900',
-  },
+  summaryHeaderPillText: {color: '#93c5fd', fontSize: 11, fontWeight: '900'},
   statsRow: {
     flexDirection: 'row',
     gap: 12,
@@ -1684,9 +1378,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  statIcon: {
-    fontSize: 25,
-  },
+  statIcon: {fontSize: 25},
   statMiniBadge: {
     paddingHorizontal: 9,
     paddingVertical: 4,
@@ -1718,11 +1410,7 @@ const styles = StyleSheet.create({
     color: '#f8fafc',
     marginBottom: 4,
   },
-  statSubLabel: {
-    fontSize: 11,
-    color: '#94a3b8',
-    lineHeight: 16,
-  },
+  statSubLabel: {fontSize: 11, color: '#94a3b8', lineHeight: 16},
   pendingInsightBox: {
     flexDirection: 'row',
     marginHorizontal: 12,
@@ -1744,13 +1432,8 @@ const styles = StyleSheet.create({
     borderRightWidth: 1,
     borderRightColor: 'rgba(255,255,255,0.06)',
   },
-  pendingInsightItemLast: {
-    borderRightWidth: 0,
-  },
-  pendingInsightTextBlock: {
-    flex: 1,
-    marginRight: 6,
-  },
+  pendingInsightItemLast: {borderRightWidth: 0},
+  pendingInsightTextBlock: {flex: 1, marginRight: 6},
   pendingInsightLabel: {
     color: '#a6b0ca',
     fontSize: 11,
@@ -1777,12 +1460,8 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
   },
-  pendingHighCount: {
-    backgroundColor: '#ef4444',
-  },
-  pendingLowCount: {
-    backgroundColor: '#10b981',
-  },
+  pendingHighCount: {backgroundColor: '#ef4444'},
+  pendingLowCount: {backgroundColor: '#10b981'},
   pendingInsightCountText: {
     color: '#ffffff',
     fontSize: 14,
@@ -1795,20 +1474,9 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     marginTop: 1,
   },
-  departmentListHeader: {
-    paddingHorizontal: 16,
-    marginBottom: 12,
-  },
-  departmentListTitle: {
-    color: '#ffffff',
-    fontSize: 18,
-    fontWeight: '900',
-  },
-  departmentListSubTitle: {
-    color: '#94a3b8',
-    fontSize: 11,
-    marginTop: 4,
-  },
+  departmentListHeader: {paddingHorizontal: 16, marginBottom: 12},
+  departmentListTitle: {color: '#ffffff', fontSize: 18, fontWeight: '900'},
+  departmentListSubTitle: {color: '#94a3b8', fontSize: 11, marginTop: 4},
   badgeGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1842,16 +1510,8 @@ const styles = StyleSheet.create({
     height: 82,
     borderRadius: 41,
   },
-  badgeHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  badgeLeftSection: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
+  badgeHeader: {flexDirection: 'row', alignItems: 'center', marginBottom: 8},
+  badgeLeftSection: {flex: 1, flexDirection: 'row', alignItems: 'center'},
   badgeIconWrap: {
     width: 32,
     height: 32,
@@ -1860,13 +1520,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 8,
   },
-  badgeIcon: {
-    fontSize: 16,
-  },
-  badgeTitleSection: {
-    flex: 1,
-    paddingRight: 2,
-  },
+  badgeIcon: {fontSize: 16},
+  badgeTitleSection: {flex: 1, paddingRight: 2},
   badgeBuyerName: {
     fontSize: 12,
     lineHeight: 15,
@@ -1874,10 +1529,7 @@ const styles = StyleSheet.create({
     color: '#f8fafc',
     marginBottom: 2,
   },
-  badgeDeptName: {
-    fontSize: 9,
-    color: '#94a3b8',
-  },
+  badgeDeptName: {fontSize: 9, color: '#94a3b8'},
   progressRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1891,10 +1543,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     overflow: 'hidden',
   },
-  progressFill: {
-    height: '100%',
-    borderRadius: 999,
-  },
+  progressFill: {height: '100%', borderRadius: 999},
   progressPercent: {
     minWidth: 28,
     textAlign: 'right',
@@ -1914,59 +1563,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  pendingBottomBadgeText: {
-    fontSize: 9,
-    color: '#ffffff',
-    fontWeight: '900',
-  },
-  badgeFooterRight: {
-    alignItems: 'flex-end',
-    gap: 2,
-  },
+  pendingBottomBadgeText: {fontSize: 9, color: '#ffffff', fontWeight: '900'},
+  badgeFooterRight: {alignItems: 'flex-end', gap: 2},
   statusPill: {
     paddingHorizontal: 7,
     paddingVertical: 2,
     borderRadius: 999,
     borderWidth: 1,
   },
-  statusPillText: {
-    fontSize: 8,
-    fontWeight: '900',
-  },
-  tapHintText: {
-    color: '#60a5fa',
-    fontSize: 8,
-    fontWeight: '900',
-  },
-  emptyState: {
-    paddingVertical: 42,
-    alignItems: 'center',
-  },
-  emptyStateIcon: {
-    fontSize: 34,
-    marginBottom: 8,
-  },
-  emptyStateText: {
-    color: '#e2e8f0',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  emptyStateSubText: {
-    color: '#94a3b8',
-    fontSize: 11,
-    marginTop: 4,
-  },
-  centerLoader: {
-    paddingVertical: 34,
-    alignItems: 'center',
-  },
-  loaderText: {
-    color: '#94a3b8',
-    marginTop: 8,
-    fontSize: 12,
-  },
-
-  // ========== SUMMARY PAGINATION ==========
+  statusPillText: {fontSize: 8, fontWeight: '900'},
+  tapHintText: {color: '#60a5fa', fontSize: 8, fontWeight: '900'},
+  emptyState: {paddingVertical: 42, alignItems: 'center'},
+  emptyStateIcon: {fontSize: 34, marginBottom: 8},
+  emptyStateText: {color: '#e2e8f0', fontSize: 14, fontWeight: '800'},
+  emptyStateSubText: {color: '#94a3b8', fontSize: 11, marginTop: 4},
+  centerLoader: {paddingVertical: 34, alignItems: 'center'},
+  loaderText: {color: '#94a3b8', marginTop: 8, fontSize: 12},
   buyerPaginationContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1975,35 +1587,17 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     marginTop: 12,
   },
-  buyerPaginationInfo: {
-    minWidth: 60,
-  },
-  buyerPaginationInfoText: {
-    color: '#94a3b8',
-    fontSize: 10,
-  },
-  buyerPaginationControls: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
+  buyerPaginationInfoText: {color: '#94a3b8', fontSize: 10},
+  buyerPaginationControls: {flexDirection: 'row', alignItems: 'center', gap: 6},
   buyerPaginationButton: {
     backgroundColor: '#1e293b',
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 6,
   },
-  buyerPaginationButtonDisabled: {
-    opacity: 0.4,
-  },
-  buyerPaginationButtonText: {
-    color: '#f1f5f9',
-    fontSize: 12,
-  },
-  buyerPageNumbersScroll: {
-    flexDirection: 'row',
-    maxWidth: 150,
-  },
+  buyerPaginationButtonDisabled: {opacity: 0.4},
+  buyerPaginationButtonText: {color: '#f1f5f9', fontSize: 12},
+  buyerPageNumbersScroll: {flexDirection: 'row', maxWidth: 150},
   buyerPageNumberButton: {
     backgroundColor: '#1e293b',
     paddingHorizontal: 8,
@@ -2013,20 +1607,9 @@ const styles = StyleSheet.create({
     minWidth: 28,
     alignItems: 'center',
   },
-  buyerPageNumberButtonActive: {
-    backgroundColor: '#3b82f6',
-  },
-  buyerPageNumberText: {
-    color: '#f1f5f9',
-    fontSize: 11,
-  },
-  buyerPageNumberTextActive: {
-    color: 'white',
-    fontWeight: 'bold',
-  },
-  buyerItemsPerPageContainer: {
-    minWidth: 50,
-  },
+  buyerPageNumberButtonActive: {backgroundColor: '#3b82f6'},
+  buyerPageNumberText: {color: '#f1f5f9', fontSize: 11},
+  buyerPageNumberTextActive: {color: 'white', fontWeight: 'bold'},
   buyerItemsPerPageSelector: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2036,16 +1619,8 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     gap: 4,
   },
-  buyerItemsPerPageText: {
-    color: '#f1f5f9',
-    fontSize: 11,
-  },
-  buyerItemsPerPageIcon: {
-    color: '#5b6b8c',
-    fontSize: 8,
-  },
-
-  // ========== MODAL ==========
+  buyerItemsPerPageText: {color: '#f1f5f9', fontSize: 11},
+  buyerItemsPerPageIcon: {color: '#5b6b8c', fontSize: 8},
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(2,6,23,0.82)',
@@ -2063,11 +1638,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.08)',
     overflow: 'hidden',
   },
-  modalBodyContent: {
-    flex: 1,
-    minHeight: 0,
-    paddingBottom: 4,
-  },
+  modalBodyContent: {flex: 1, minHeight: 0, paddingBottom: 4},
   detailsModalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -2078,11 +1649,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255,255,255,0.06)',
   },
-  detailsHeaderLeft: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
+  detailsHeaderLeft: {flex: 1, flexDirection: 'row', alignItems: 'center'},
   detailsModalIconBox: {
     width: 44,
     height: 44,
@@ -2092,22 +1659,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 10,
   },
-  detailsModalIcon: {
-    fontSize: 20,
-  },
-  detailsTitleWrap: {
-    flex: 1,
-  },
-  modalTitle: {
-    fontSize: 16,
-    fontWeight: '900',
-    color: '#f8fafc',
-  },
-  modalSubTitle: {
-    color: '#94a3b8',
-    fontSize: 11,
-    marginTop: 3,
-  },
+  detailsModalIcon: {fontSize: 20},
+  detailsTitleWrap: {flex: 1},
+  modalTitle: {fontSize: 16, fontWeight: '900', color: '#f8fafc'},
+  modalSubTitle: {color: '#94a3b8', fontSize: 11, marginTop: 3},
   modalCloseCircle: {
     width: 34,
     height: 34,
@@ -2117,11 +1672,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginLeft: 10,
   },
-  modalCloseBtn: {
-    fontSize: 16,
-    color: '#fca5a5',
-    fontWeight: '900',
-  },
+  modalCloseBtn: {fontSize: 16, color: '#fca5a5', fontWeight: '900'},
   modalStatsRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2138,11 +1689,7 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
     paddingHorizontal: 12,
   },
-  modalStatValue: {
-    color: '#ffffff',
-    fontSize: 18,
-    fontWeight: '900',
-  },
+  modalStatValue: {color: '#ffffff', fontSize: 18, fontWeight: '900'},
   modalStatLabel: {
     color: '#93c5fd',
     fontSize: 10,
@@ -2158,11 +1705,7 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     paddingHorizontal: 12,
   },
-  modalDateChipText: {
-    color: '#bbf7d0',
-    fontSize: 11,
-    fontWeight: '900',
-  },
+  modalDateChipText: {color: '#bbf7d0', fontSize: 11, fontWeight: '900'},
   modalSearchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2181,17 +1724,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(148,163,184,0.14)',
   },
-  searchIcon: {
-    fontSize: 14,
-    marginRight: 8,
-    color: '#5b6b8c',
-  },
-  modalSearchInput: {
-    flex: 1,
-    color: '#f8fafc',
-    fontSize: 12,
-    padding: 0,
-  },
+  searchIcon: {fontSize: 14, marginRight: 8, color: '#5b6b8c'},
+  modalSearchInput: {flex: 1, color: '#f8fafc', fontSize: 12, padding: 0},
   modalClearButton: {
     backgroundColor: 'rgba(236,72,153,0.14)',
     borderRadius: 12,
@@ -2200,15 +1734,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(236,72,153,0.28)',
   },
-  modalClearButtonText: {
-    color: '#f472b6',
-    fontSize: 11,
-    fontWeight: '900',
-  },
-  modalTableShell: {
+  modalClearButtonText: {color: '#f472b6', fontSize: 11, fontWeight: '900'},
+  compactTableShell: {
     flex: 1,
     minHeight: 120,
-    marginHorizontal: 16,
+    marginHorizontal: 12,
     marginTop: 2,
     backgroundColor: '#0f172a',
     borderRadius: 16,
@@ -2216,96 +1746,64 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.08)',
     overflow: 'hidden',
   },
-  modalTableVerticalScroll: {
-    flex: 1,
-  },
-  modalTableScrollContent: {
-    paddingBottom: 4,
-  },
-  tableHeader: {
+  compactTableHeader: {
     flexDirection: 'row',
-    backgroundColor: '#0f111a',
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#1e293b',
-  },
-  modalTableHeader: {
+    minHeight: 42,
     backgroundColor: '#16213d',
-    borderBottomColor: 'rgba(148,163,184,0.20)',
-    paddingVertical: 13,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(148,163,184,0.18)',
   },
-  headerText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#94a3b8',
+  compactHeaderCell: {
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+    borderRightWidth: 1,
+    borderRightColor: 'rgba(148,163,184,0.12)',
   },
-  modalHeaderText: {
+  compactHeaderText: {
     color: '#cbd5e1',
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '900',
     textTransform: 'uppercase',
-    letterSpacing: 0.3,
+    letterSpacing: 0.2,
   },
-  tableRow: {
+  compactTableScroll: {flex: 1},
+  compactTableRow: {
     flexDirection: 'row',
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#1e293b',
-  },
-  modalTableRow: {
+    minHeight: 68,
     backgroundColor: '#0f172a',
-    borderBottomColor: 'rgba(148,163,184,0.12)',
-    paddingVertical: 13,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(148,163,184,0.10)',
   },
-  modalTableRowAlt: {
-    backgroundColor: '#111c31',
-  },
-  rowText: {
-    fontSize: 11,
-    color: '#f1f5f9',
-  },
-  modalRowText: {
-    color: '#e2e8f0',
-    fontSize: 11,
-  },
-  modalSerialCell: {
-    color: '#93c5fd',
-    fontWeight: '900',
-  },
-  modalPackingText: {
-    color: '#ffffff',
-    fontSize: 11,
-    fontWeight: '900',
-  },
-  columnStack: {
-    flexDirection: 'column',
+  compactTableRowAlt: {backgroundColor: '#111c31'},
+  compactBodyCell: {
     justifyContent: 'center',
-    paddingVertical: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    borderRightWidth: 1,
+    borderRightColor: 'rgba(148,163,184,0.08)',
   },
-  modalColumnStack: {
-    paddingVertical: 0,
-    paddingRight: 10,
+  compactDocCol: {flex: 1.5},
+  compactValueCol: {flex: 0.92},
+  compactDateCol: {flex: 0.82},
+  compactDocNo: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '900',
+    marginBottom: 3,
   },
-  modalUpperText: {
-    fontSize: 11,
-    color: '#f8fafc',
+  compactDeptName: {color: '#94a3b8', fontSize: 9, fontWeight: '700'},
+  compactValueText: {
+    color: '#34d399',
+    fontSize: 10,
     fontWeight: '900',
     marginBottom: 4,
   },
-  modalLowerText: {
-    fontSize: 10,
-    color: '#94a3b8',
-    fontWeight: '700',
-  },
-  modalValueText: {
-    color: '#34d399',
-  },
-  modalDateCell: {
+  compactPcsText: {color: '#cbd5e1', fontSize: 9, fontWeight: '700'},
+  compactDateText: {
     color: '#86efac',
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '900',
+    lineHeight: 13,
   },
   modalLoaderCard: {
     margin: 16,
@@ -2323,22 +1821,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.06)',
   },
-  modalEmptyIcon: {
-    fontSize: 34,
-    marginBottom: 10,
-  },
-  modalEmptyTitle: {
-    color: '#f8fafc',
-    fontSize: 15,
-    fontWeight: '900',
-  },
-  modalEmptySubTitle: {
-    color: '#94a3b8',
-    fontSize: 11,
-    marginTop: 5,
-  },
-
-  // ========== MODAL PAGINATION ==========
+  modalEmptyIcon: {fontSize: 34, marginBottom: 10},
+  modalEmptyTitle: {color: '#f8fafc', fontSize: 15, fontWeight: '900'},
+  modalEmptySubTitle: {color: '#94a3b8', fontSize: 11, marginTop: 5},
   paginationContainer: {
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -2347,13 +1832,11 @@ const styles = StyleSheet.create({
     marginTop: 6,
     backgroundColor: '#0b1220',
   },
-  paginationInfo: {
-    alignItems: 'center',
-    marginBottom: 8,
-  },
   paginationInfoText: {
     color: '#94a3b8',
     fontSize: 12,
+    textAlign: 'center',
+    marginBottom: 8,
   },
   paginationControls: {
     flexDirection: 'row',
@@ -2368,23 +1851,10 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     marginHorizontal: 3,
   },
-  paginationButtonDisabled: {
-    backgroundColor: '#0f111a',
-    opacity: 0.5,
-  },
-  paginationButtonText: {
-    color: '#f1f5f9',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  paginationButtonTextDisabled: {
-    color: '#5b6b8c',
-  },
-  pageNumbersScroll: {
-    flexDirection: 'row',
-    flexGrow: 0,
-    maxWidth: 150,
-  },
+  paginationButtonDisabled: {backgroundColor: '#0f111a', opacity: 0.5},
+  paginationButtonText: {color: '#f1f5f9', fontSize: 12, fontWeight: '700'},
+  paginationButtonTextDisabled: {color: '#5b6b8c'},
+  pageNumbersScroll: {flexDirection: 'row', flexGrow: 0, maxWidth: 150},
   pageNumberButton: {
     backgroundColor: '#1e293b',
     paddingHorizontal: 9,
@@ -2394,27 +1864,16 @@ const styles = StyleSheet.create({
     minWidth: 32,
     alignItems: 'center',
   },
-  pageNumberButtonActive: {
-    backgroundColor: '#3b82f6',
-  },
-  pageNumberText: {
-    color: '#f1f5f9',
-    fontSize: 12,
-  },
-  pageNumberTextActive: {
-    color: 'white',
-    fontWeight: 'bold',
-  },
+  pageNumberButtonActive: {backgroundColor: '#3b82f6'},
+  pageNumberText: {color: '#f1f5f9', fontSize: 12},
+  pageNumberTextActive: {color: 'white', fontWeight: 'bold'},
   itemsPerPageContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-end',
     gap: 8,
   },
-  itemsPerPageLabel: {
-    color: '#94a3b8',
-    fontSize: 11,
-  },
+  itemsPerPageLabel: {color: '#94a3b8', fontSize: 11},
   itemsPerPageSelector: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2424,16 +1883,8 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     gap: 4,
   },
-  itemsPerPageText: {
-    color: '#f1f5f9',
-    fontSize: 12,
-  },
-  itemsPerPageIcon: {
-    color: '#5b6b8c',
-    fontSize: 10,
-  },
-
-  // ========== DATE PICKER ==========
+  itemsPerPageText: {color: '#f1f5f9', fontSize: 12},
+  itemsPerPageIcon: {color: '#5b6b8c', fontSize: 10},
   datePickerModal: {
     backgroundColor: '#12141c',
     borderRadius: 20,
@@ -2455,36 +1906,18 @@ const styles = StyleSheet.create({
     justifyContent: 'space-around',
     paddingVertical: 20,
   },
-  datePickerColumn: {
-    alignItems: 'center',
-    width: '30%',
-  },
-  datePickerLabel: {
-    fontSize: 12,
-    color: '#94a3b8',
-    marginBottom: 10,
-  },
-  datePickerScroll: {
-    height: 200,
-    width: '100%',
-  },
+  datePickerColumn: {alignItems: 'center', width: '30%'},
+  datePickerLabel: {fontSize: 12, color: '#94a3b8', marginBottom: 10},
+  datePickerScroll: {height: 200, width: '100%'},
   datePickerItem: {
     paddingVertical: 10,
     paddingHorizontal: 15,
     alignItems: 'center',
     borderRadius: 8,
   },
-  datePickerItemSelected: {
-    backgroundColor: '#3b82f6',
-  },
-  datePickerItemText: {
-    fontSize: 16,
-    color: '#f1f5f9',
-  },
-  datePickerItemTextSelected: {
-    color: 'white',
-    fontWeight: 'bold',
-  },
+  datePickerItemSelected: {backgroundColor: '#3b82f6'},
+  datePickerItemText: {fontSize: 16, color: '#f1f5f9'},
+  datePickerItemTextSelected: {color: 'white', fontWeight: 'bold'},
   datePickerButtons: {
     flexDirection: 'row',
     borderTopWidth: 1,
@@ -2497,20 +1930,9 @@ const styles = StyleSheet.create({
     borderRightWidth: 1,
     borderRightColor: '#1e293b',
   },
-  datePickerCancelText: {
-    color: '#94a3b8',
-    fontSize: 14,
-  },
-  datePickerConfirm: {
-    flex: 1,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  datePickerConfirmText: {
-    color: '#3b82f6',
-    fontSize: 14,
-    fontWeight: '800',
-  },
+  datePickerCancelText: {color: '#94a3b8', fontSize: 14},
+  datePickerConfirm: {flex: 1, paddingVertical: 14, alignItems: 'center'},
+  datePickerConfirmText: {color: '#3b82f6', fontSize: 14, fontWeight: '800'},
 });
 
 export default BLScreen;

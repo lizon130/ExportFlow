@@ -118,33 +118,44 @@ const BankSubmitScreen = () => {
   const fetchSummaryStats = async () => {
     try {
       const pendingResponse = await fetch(
-        `${API_BASE_URL}/api/Export/Get_Pending_BankSubmission_DateCount`,
+        `${API_BASE_URL}/api/Export/Get-Pending-Bank-Submission-Date-Count`,
       );
       const pendingData = await pendingResponse.json();
 
       const completedResponse = await fetch(
-        `${API_BASE_URL}/api/Export/Get_Completed_BankSubmission_DateCount`,
+        `${API_BASE_URL}/api/Export/Get-Completed-Bank-Submission-Date-Count`,
       );
       const completedData = await completedResponse.json();
 
       const pendingArray = normalizeArray(pendingData);
       const completedArray = normalizeArray(completedData);
 
-      const pendingCount =
-        pendingArray[0]?.totalPackagingCount ||
-        pendingArray[0]?.pendingBankSubmissionDateCount ||
-        pendingArray[0]?.pendingBank ||
-        0;
-      const totalValue =
-        pendingArray[0]?.totalExportValue ||
-        pendingArray[0]?.totalValue ||
-        pendingArray[0]?.pendingValue ||
-        0;
-      const completedCount =
-        completedArray[0]?.completedBankSubmissionDateCount ||
-        completedArray[0]?.completedBank ||
-        completedArray[0]?.totalPackagingCount ||
-        0;
+      // New API returns department-wise rows.
+      // Sum all pending bank counts and total values.
+      const pendingCount = pendingArray.reduce(
+        (sum, item) => sum + (item?.pendingBankSubmissionDateCount || 0),
+        0,
+      );
+
+      const totalValue = pendingArray.reduce(
+        (sum, item) =>
+          sum +
+          (item?.totalValue ||
+            item?.totalExportValue ||
+            item?.pendingValue ||
+            0),
+        0,
+      );
+
+      const completedCount = completedArray.reduce(
+        (sum, item) =>
+          sum +
+          (item?.completedBankSubmissionDateCount ||
+            item?.completedBank ||
+            item?.totalPackagingCount ||
+            0),
+        0,
+      );
 
       setSummaryStats({
         totalValue,
@@ -169,7 +180,7 @@ const BankSubmitScreen = () => {
 
     try {
       const response = await fetch(
-        `${API_BASE_URL}/api/Export/GetBy_DepartmentName_Wise_ExpoDoc_Completed_Total_Count`,
+        `${API_BASE_URL}/api/Export/Get-Pending-Bank-Submission-Date-Count`,
         {
           method: 'GET',
           headers: {
@@ -185,8 +196,22 @@ const BankSubmitScreen = () => {
 
       const data = await response.json();
       const dataArray = normalizeArray(data);
+
+      // New API returns department-wise bank pending rows.
+      // Show one card per department where pendingBankSubmissionDateCount > 0.
       const pendingBankDepartments = dataArray
-        .filter(item => (item?.pendingBank || 0) > 0)
+        .filter(item => (item?.pendingBankSubmissionDateCount || 0) > 0)
+        .map(item => ({
+          ...item,
+
+          // IMPORTANT: map new API field to old UI field
+          pendingBank: item?.pendingBankSubmissionDateCount || 0,
+
+          customerName: item?.customerName || item?.departmentName || 'Unknown',
+          departmentName: item?.departmentName || item?.departmentCode || '-',
+          departmentCode: item?.departmentCode || '',
+          totalValue: item?.totalValue || 0,
+        }))
         .sort((a, b) => (b?.pendingBank || 0) - (a?.pendingBank || 0));
 
       setBankSummaryData(pendingBankDepartments);
@@ -194,6 +219,7 @@ const BankSubmitScreen = () => {
     } catch (fetchError) {
       console.error('Error fetching pending bank summary:', fetchError);
       setBankSummaryData([]);
+      setBankCurrentPage(1);
       setError(`Network error: ${fetchError.message}`);
     } finally {
       setBankLoading(false);
@@ -329,10 +355,9 @@ const BankSubmitScreen = () => {
     setModalSearchText('');
 
     try {
-      let url = `${API_BASE_URL}/api/Export/by-dept-BankSubmission_DateList`;
-      if (deptCode) {
-        url += `?depName=${encodeURIComponent(deptCode)}`;
-      }
+      let url = `${API_BASE_URL}/api/Export/Get-By-Dept-Bank-Submission-Date-List?depName=${encodeURIComponent(
+        deptCode || '',
+      )}`;
 
       const response = await fetch(url, {
         method: 'GET',
@@ -970,263 +995,186 @@ const BankSubmitScreen = () => {
           ) : modalCurrentPageData.length > 0 ? (
             <View style={styles.modalBodyContent}>
               <View style={styles.modalTableShell}>
+                <View style={styles.compactBankTableHeader}>
+                  <View
+                    style={[
+                      styles.compactBankHeaderCell,
+                      styles.compactBankDocCol,
+                    ]}>
+                    <Text style={styles.compactBankHeaderText}>Document</Text>
+                  </View>
+
+                  <View
+                    style={[
+                      styles.compactBankHeaderCell,
+                      styles.compactBankQtyCol,
+                    ]}>
+                    <Text style={styles.compactBankHeaderText}>
+                      Qty / Value
+                    </Text>
+                  </View>
+
+                  <View
+                    style={[
+                      styles.compactBankHeaderCell,
+                      styles.compactBankDateCol,
+                    ]}>
+                    <Text style={styles.compactBankHeaderText}>
+                      Dates / Status
+                    </Text>
+                  </View>
+                </View>
+
                 <ScrollView
-                  style={styles.modalTableVerticalScroll}
-                  contentContainerStyle={styles.modalTableScrollContent}
+                  style={styles.compactBankTableBody}
+                  contentContainerStyle={styles.compactBankTableContent}
                   nestedScrollEnabled={true}
                   keyboardShouldPersistTaps="handled"
                   showsVerticalScrollIndicator={true}>
-                  <ScrollView
-                    horizontal
-                    nestedScrollEnabled={true}
-                    keyboardShouldPersistTaps="handled"
-                    showsHorizontalScrollIndicator={true}>
-                    <View>
+                  {modalCurrentPageData.map((item, index) => {
+                    const bankStatus = getBankStatus(item?.bankSubmissionDate);
+                    const bankStatusColor = getBankStatusColor(
+                      item?.bankSubmissionDate,
+                    );
+
+                    return (
                       <View
-                        style={[styles.tableHeader, styles.modalTableHeader]}>
-                        <Text
+                        key={`${
+                          item?.packagingListNo || item?.expDocumentNo || index
+                        }-${index}`}
+                        style={[
+                          styles.compactBankTableRow,
+                          index % 2 === 0 && styles.compactBankTableRowAlt,
+                        ]}>
+                        <View
                           style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 70},
+                            styles.compactBankBodyCell,
+                            styles.compactBankDocCol,
                           ]}>
-                          Sl No
-                        </Text>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 120},
-                          ]}>
-                          Packing No
-                        </Text>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 150},
-                          ]}>
-                          Export Doc No
-                        </Text>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 160},
-                          ]}>
-                          Customer/Dept
-                        </Text>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 105},
-                          ]}>
-                          Carton/Pcs
-                        </Text>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 110},
-                          ]}>
-                          Value
-                        </Text>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 110},
-                          ]}>
-                          B/L Date
-                        </Text>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 125},
-                          ]}>
-                          Shipping Date
-                        </Text>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 125},
-                          ]}>
-                          Bank Date
-                        </Text>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 95},
-                          ]}>
-                          Status
-                        </Text>
-                      </View>
-
-                      {modalCurrentPageData.map((item, index) => {
-                        const bankStatus = getBankStatus(
-                          item?.bankSubmissionDate,
-                        );
-                        const bankStatusColor = getBankStatusColor(
-                          item?.bankSubmissionDate,
-                        );
-
-                        return (
-                          <View
-                            key={`${
-                              item?.packagingListNo ||
-                              item?.expDocumentNo ||
-                              index
-                            }-${index}`}
-                            style={[
-                              styles.tableRow,
-                              styles.modalTableRow,
-                              index % 2 === 0 && styles.modalTableRowAlt,
-                            ]}>
-                            <Text
-                              style={[
-                                styles.rowText,
-                                styles.modalRowText,
-                                styles.modalSerialCell,
-                                {width: 70},
-                              ]}>
+                          <View style={styles.compactBankDocTopRow}>
+                            <Text style={styles.compactBankSerialBadge}>
                               {(modalCurrentPage - 1) * modalItemsPerPage +
                                 index +
                                 1}
                             </Text>
-
                             <Text
-                              style={[
-                                styles.rowText,
-                                styles.modalPackingText,
-                                {width: 120},
-                              ]}
+                              style={styles.compactBankPackingText}
                               numberOfLines={1}>
                               {item?.packagingListNo || '-'}
                             </Text>
+                          </View>
 
+                          <Text
+                            style={styles.compactBankExportText}
+                            numberOfLines={1}>
+                            {item?.expDocumentNo || '-'}
+                          </Text>
+
+                          <Text
+                            style={styles.compactBankCustomerText}
+                            numberOfLines={1}>
+                            {item?.customerName || '-'}
+                          </Text>
+
+                          <Text
+                            style={styles.compactBankDeptText}
+                            numberOfLines={1}>
+                            {item?.departmentName || '-'}
+                          </Text>
+                        </View>
+
+                        <View
+                          style={[
+                            styles.compactBankBodyCell,
+                            styles.compactBankQtyCol,
+                          ]}>
+                          <Text
+                            style={styles.compactBankCartonText}
+                            numberOfLines={1}>
+                            {item?.noOfCarton
+                              ? item.noOfCarton.toLocaleString()
+                              : '0'}{' '}
+                            ctn
+                          </Text>
+
+                          <Text
+                            style={styles.compactBankPcsText}
+                            numberOfLines={1}>
+                            {item?.noOfPcs
+                              ? item.noOfPcs.toLocaleString()
+                              : '0'}{' '}
+                            pcs
+                          </Text>
+
+                          <Text
+                            style={styles.compactBankValueText}
+                            numberOfLines={1}>
+                            {item?.totalValue
+                              ? item.totalValue.toLocaleString()
+                              : '0'}
+                          </Text>
+                        </View>
+
+                        <View
+                          style={[
+                            styles.compactBankBodyCell,
+                            styles.compactBankDateCol,
+                          ]}>
+                          <View style={styles.compactBankDateLine}>
+                            <Text style={styles.compactBankDateLabel}>B/L</Text>
                             <Text
-                              style={[
-                                styles.rowText,
-                                styles.modalRowText,
-                                {width: 150},
-                              ]}
-                              numberOfLines={1}>
-                              {item?.expDocumentNo || '-'}
-                            </Text>
-
-                            <View
-                              style={[
-                                styles.columnStack,
-                                styles.modalColumnStack,
-                                {width: 160},
-                              ]}>
-                              <Text
-                                style={styles.modalUpperText}
-                                numberOfLines={1}>
-                                {item?.customerName || '-'}
-                              </Text>
-                              <Text
-                                style={styles.modalLowerText}
-                                numberOfLines={1}>
-                                {item?.departmentName || '-'}
-                              </Text>
-                            </View>
-
-                            <View
-                              style={[
-                                styles.columnStack,
-                                styles.modalColumnStack,
-                                {width: 105},
-                              ]}>
-                              <Text
-                                style={styles.modalUpperText}
-                                numberOfLines={1}>
-                                {item?.noOfCarton
-                                  ? item.noOfCarton.toLocaleString()
-                                  : '0'}
-                              </Text>
-                              <Text
-                                style={styles.modalLowerText}
-                                numberOfLines={1}>
-                                {item?.noOfPcs
-                                  ? item.noOfPcs.toLocaleString()
-                                  : '0'}{' '}
-                                pcs
-                              </Text>
-                            </View>
-
-                            <Text
-                              style={[
-                                styles.rowText,
-                                styles.modalValueText,
-                                {width: 110},
-                              ]}
-                              numberOfLines={1}>
-                              {item?.totalValue
-                                ? item.totalValue.toLocaleString()
-                                : '0'}
-                            </Text>
-
-                            <Text
-                              style={[
-                                styles.rowText,
-                                styles.modalDateCell,
-                                {width: 110},
-                              ]}
+                              style={styles.compactBankDateText}
                               numberOfLines={1}>
                               {item?.blDate ? item.blDate.split('T')[0] : '-'}
                             </Text>
+                          </View>
 
+                          <View style={styles.compactBankDateLine}>
+                            <Text style={styles.compactBankDateLabel}>
+                              Ship
+                            </Text>
                             <Text
-                              style={[
-                                styles.rowText,
-                                styles.modalDateCell,
-                                {width: 125},
-                              ]}
+                              style={styles.compactBankDateText}
                               numberOfLines={1}>
                               {item?.shippingDate
                                 ? item.shippingDate.split('T')[0]
                                 : '-'}
                             </Text>
+                          </View>
 
+                          <View style={styles.compactBankDateLine}>
+                            <Text style={styles.compactBankDateLabel}>
+                              Bank
+                            </Text>
                             <Text
-                              style={[
-                                styles.rowText,
-                                styles.modalDateCell,
-                                {width: 125},
-                              ]}
+                              style={styles.compactBankDateText}
                               numberOfLines={1}>
                               {item?.bankSubmissionDate
                                 ? item.bankSubmissionDate.split('T')[0]
                                 : '-'}
                             </Text>
-
-                            <View
-                              style={[
-                                styles.modalStatusBadge,
-                                {
-                                  width: 95,
-                                  backgroundColor: `${bankStatusColor}22`,
-                                  borderColor: `${bankStatusColor}55`,
-                                },
-                              ]}>
-                              <Text
-                                style={[
-                                  styles.modalStatusText,
-                                  {color: bankStatusColor},
-                                ]}>
-                                {bankStatus}
-                              </Text>
-                            </View>
                           </View>
-                        );
-                      })}
-                    </View>
-                  </ScrollView>
+
+                          <View
+                            style={[
+                              styles.compactBankStatusBadge,
+                              {
+                                backgroundColor: `${bankStatusColor}22`,
+                                borderColor: `${bankStatusColor}55`,
+                              },
+                            ]}>
+                            <Text
+                              style={[
+                                styles.compactBankStatusText,
+                                {color: bankStatusColor},
+                              ]}>
+                              {bankStatus}
+                            </Text>
+                          </View>
+                        </View>
+                      </View>
+                    );
+                  })}
                 </ScrollView>
               </View>
 
@@ -1369,7 +1317,7 @@ const BankSubmitScreen = () => {
           <View>
             <Text style={styles.sectionTitle}>🏦 Bank Submission Summary</Text>
             <Text style={styles.summaryHeaderSubText}>
-              Pending bank submission by active department
+              Overview by active department
             </Text>
           </View>
 
@@ -1512,7 +1460,7 @@ const BankSubmitScreen = () => {
         )}
 
         <View style={styles.departmentListHeader}>
-          <Text style={styles.departmentListTitle}>Pending by Department</Text>
+          <Text style={styles.departmentListTitle}>Pending Bank Submission</Text>
           <Text style={styles.departmentListSubTitle}>
             Tap any card for bank submission details
           </Text>
@@ -2694,6 +2642,145 @@ const styles = StyleSheet.create({
     color: '#94a3b8',
     fontSize: 11,
     marginTop: 5,
+  },
+
+  // ========== COMPACT BANK MODAL TABLE ==========
+  compactBankTableHeader: {
+    flexDirection: 'row',
+    minHeight: 42,
+    backgroundColor: '#16213d',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(148,163,184,0.20)',
+  },
+  compactBankHeaderCell: {
+    justifyContent: 'center',
+    paddingHorizontal: 7,
+    borderRightWidth: 1,
+    borderRightColor: 'rgba(148,163,184,0.12)',
+  },
+  compactBankHeaderText: {
+    color: '#cbd5e1',
+    fontSize: 9,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    letterSpacing: 0.2,
+  },
+  compactBankTableBody: {
+    flex: 1,
+    minHeight: 0,
+  },
+  compactBankTableContent: {
+    paddingBottom: 4,
+  },
+  compactBankTableRow: {
+    flexDirection: 'row',
+    minHeight: 84,
+    backgroundColor: '#0f172a',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(148,163,184,0.10)',
+  },
+  compactBankTableRowAlt: {
+    backgroundColor: '#111c31',
+  },
+  compactBankBodyCell: {
+    justifyContent: 'center',
+    paddingHorizontal: 7,
+    paddingVertical: 8,
+    borderRightWidth: 1,
+    borderRightColor: 'rgba(148,163,184,0.08)',
+  },
+  compactBankDocCol: {
+    flex: 1.55,
+  },
+  compactBankQtyCol: {
+    flex: 0.9,
+  },
+  compactBankDateCol: {
+    flex: 1.05,
+  },
+  compactBankDocTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  compactBankSerialBadge: {
+    minWidth: 22,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: 'rgba(59,130,246,0.18)',
+    color: '#93c5fd',
+    fontSize: 9,
+    fontWeight: '900',
+    textAlign: 'center',
+    lineHeight: 20,
+    marginRight: 5,
+  },
+  compactBankPackingText: {
+    flex: 1,
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  compactBankExportText: {
+    color: '#c4b5fd',
+    fontSize: 9,
+    fontWeight: '800',
+    marginBottom: 3,
+  },
+  compactBankCustomerText: {
+    color: '#93c5fd',
+    fontSize: 10,
+    fontWeight: '800',
+    marginBottom: 2,
+  },
+  compactBankDeptText: {
+    color: '#94a3b8',
+    fontSize: 9,
+    fontWeight: '700',
+  },
+  compactBankCartonText: {
+    color: '#f8fafc',
+    fontSize: 10,
+    fontWeight: '900',
+    marginBottom: 4,
+  },
+  compactBankPcsText: {
+    color: '#cbd5e1',
+    fontSize: 9,
+    fontWeight: '700',
+    marginBottom: 5,
+  },
+  compactBankValueText: {
+    color: '#34d399',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  compactBankDateLine: {
+    marginBottom: 3,
+  },
+  compactBankDateLabel: {
+    color: '#64748b',
+    fontSize: 7,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  compactBankDateText: {
+    color: '#86efac',
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: '800',
+  },
+  compactBankStatusBadge: {
+    alignSelf: 'flex-start',
+    marginTop: 2,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  compactBankStatusText: {
+    fontSize: 8,
+    fontWeight: '900',
   },
 
   // ========== MODAL PAGINATION ==========

@@ -94,69 +94,56 @@ const ExportDocsScreen = () => {
   // Fetch departments AND buyer summary together
   const fetchDepartmentsAndSummary = async () => {
     setBuyerLoading(true);
+
     try {
-      // First fetch the pending summary
-      const summaryResponse = await fetch(
-        `${API_BASE_URL}/api/Export/GetBy_DepartmentName_Wise_ExpoDoc_Pending_Total_Count`,
+      const response = await fetch(
+        `${API_BASE_URL}/api/Export/Get-Pending-Export-Document-Count`,
+        {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+          },
+        },
       );
-      const summaryData = await summaryResponse.json();
 
-      console.log('Raw Pending Summary Data:', summaryData);
-
-      // Filter to show ONLY departments with pendingExpDocument > 0
-      let pendingDepartments = [];
-      if (Array.isArray(summaryData) && summaryData.length > 0) {
-        pendingDepartments = summaryData.filter(
-          item => item.pendingExpDocument > 0,
-        );
-      } else if (
-        summaryData &&
-        typeof summaryData === 'object' &&
-        !Array.isArray(summaryData)
-      ) {
-        // If single object returned
-        if (summaryData.pendingExpDocument > 0) {
-          pendingDepartments = [summaryData];
-        }
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      console.log('Filtered Pending Departments:', pendingDepartments);
+      const data = await response.json();
+      const dataArray = Array.isArray(data) ? data : data ? [data] : [];
+
+      // New API returns department-wise rows.
+      // Keep only departments with pending export documents.
+      const pendingDepartments = dataArray
+        .filter(item => (item?.pendingExportCount || 0) > 0)
+        .map(item => ({
+          ...item,
+
+          // IMPORTANT: map new API field to old UI field
+          pendingExpDocument: item?.pendingExportCount || 0,
+
+          customerName: item?.customerName || item?.departmentName || 'Unknown',
+          departmentName: item?.departmentName || item?.departmentCode || '-',
+          departmentCode: item?.departmentCode || '',
+        }))
+        .sort(
+          (a, b) => (b?.pendingExpDocument || 0) - (a?.pendingExpDocument || 0),
+        );
+
       setBuyerSummaryData(pendingDepartments);
       setFilteredBuyerData(pendingDepartments);
       setBuyerTotalItems(pendingDepartments.length);
 
-      // Now fetch all departments for dropdown
-      const deptResponse = await fetch(
-        `${API_BASE_URL}/api/Department/get-all-department`,
-      );
-      const allDepartments = await deptResponse.json();
-
-      // Filter department list to ONLY show departments that exist in pending summary
-      if (Array.isArray(allDepartments) && Array.isArray(pendingDepartments)) {
-        const pendingDeptCodes = new Set(
-          pendingDepartments
-            .map(item => item.departmentCode)
-            .filter(code => code),
-        );
-
-        const filteredDepartments = allDepartments.filter(dept =>
-          pendingDeptCodes.has(dept.departmentCode),
-        );
-
-        console.log(
-          'Filtered Departments for Dropdown:',
-          filteredDepartments.length,
-        );
-        setDepartmentList(filteredDepartments);
-      } else {
-        setDepartmentList([]);
-      }
+      // Optional dropdown source if you enable department selector later.
+      setDepartmentList(pendingDepartments);
     } catch (error) {
-      console.error('Error fetching data:', error);
+      console.error('Error fetching pending summary:', error);
       setBuyerSummaryData([]);
       setFilteredBuyerData([]);
-      setDepartmentList([]);
       setBuyerTotalItems(0);
+      setDepartmentList([]);
     } finally {
       setBuyerLoading(false);
       setDepartmentsFetched(true);
@@ -538,11 +525,11 @@ const ExportDocsScreen = () => {
   // Fetch Export Data for Modal
   const fetchModalExportData = async (deptCode, deptName) => {
     setModalLoading(true);
+
     try {
-      let url = `${API_BASE_URL}/api/Export/by-dept-ExportDocmentList`;
-      if (deptCode) {
-        url += `?depName=${encodeURIComponent(deptCode)}`;
-      }
+      let url = `${API_BASE_URL}/api/Export/Get-By-Dept-Export-Docment-List?depName=${encodeURIComponent(
+        deptCode || '',
+      )}`;
 
       const response = await fetch(url, {
         method: 'GET',
@@ -557,14 +544,8 @@ const ExportDocsScreen = () => {
       }
 
       const data = await response.json();
-      let dataArray = [];
-      if (Array.isArray(data)) {
-        dataArray = data;
-      } else if (data && typeof data === 'object') {
-        dataArray = [data];
-      } else {
-        dataArray = [];
-      }
+
+      let dataArray = Array.isArray(data) ? data : data ? [data] : [];
 
       const dateFilteredArray = filterBySelectedDates(dataArray);
 
@@ -741,13 +722,13 @@ const ExportDocsScreen = () => {
 
   // Handle badge click - open modal with department details
   const handleBadgeClick = async item => {
-    setModalDepartmentName(
-      item.customerName || item.departmentName || 'Unknown',
-    );
-    await fetchModalExportData(
-      item.departmentCode,
-      item.customerName || item.departmentName,
-    );
+    const displayTitle =
+      item?.customerName && item?.departmentName
+        ? `${item.customerName} • ${item.departmentName}`
+        : item?.customerName || item?.departmentName || 'Unknown';
+
+    setModalDepartmentName(displayTitle);
+    await fetchModalExportData(item?.departmentCode, displayTitle);
     setShowDetailsModal(true);
   };
 
@@ -757,7 +738,7 @@ const ExportDocsScreen = () => {
     setError('');
 
     try {
-      let url = `${API_BASE_URL}/api/Export/by-dept-ExportDocmentList`;
+      let url = `${API_BASE_URL}/api/Export/Get-By-Dept-Export-Docment-List`;
 
       if (departmentCode) {
         url += `?depName=${encodeURIComponent(departmentCode)}`;
@@ -1314,151 +1295,93 @@ const ExportDocsScreen = () => {
               <Text style={styles.loaderText}>Loading export documents...</Text>
             </View>
           ) : modalCurrentPageData.length > 0 ? (
-            <>
+            <View style={styles.modalResultBody}>
               <View style={styles.modalTableShell}>
-                <ScrollView
-                  style={styles.modalTableVerticalScroll}
-                  showsVerticalScrollIndicator={true}>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={true}>
-                    <View>
-                      <View
-                        style={[styles.tableHeader, styles.modalTableHeader]}>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 70},
-                          ]}>
-                          Sl No
-                        </Text>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 125},
-                          ]}>
-                          Packing No
-                        </Text>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 185},
-                          ]}>
-                          Customer/Dept
-                        </Text>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 110},
-                          ]}>
-                          Value/Piece
-                        </Text>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 120},
-                          ]}>
-                          Ex-Factory Date
-                        </Text>
-                      </View>
+                <View style={styles.compactModalTableHeader}>
+                  <View
+                    style={[styles.compactHeaderCell, styles.compactDocCol]}>
+                    <Text style={styles.compactHeaderText}>Document</Text>
+                  </View>
 
-                      {modalCurrentPageData.map((item, index) => (
-                        <View
-                          key={`${item?.packagingListNo || index}-${index}`}
-                          style={[
-                            styles.tableRow,
-                            styles.modalTableRow,
-                            index % 2 === 0 && styles.modalTableRowAlt,
-                          ]}>
-                          <Text
-                            style={[
-                              styles.rowText,
-                              styles.modalRowText,
-                              styles.modalSerialCell,
-                              {width: 70},
-                            ]}>
+                  <View
+                    style={[styles.compactHeaderCell, styles.compactValueCol]}>
+                    <Text style={styles.compactHeaderText}>Value / Pcs</Text>
+                  </View>
+
+                  <View
+                    style={[styles.compactHeaderCell, styles.compactDateCol]}>
+                    <Text style={styles.compactHeaderText}>Ex-Factory</Text>
+                  </View>
+                </View>
+
+                <ScrollView
+                  style={styles.compactModalTableBody}
+                  showsVerticalScrollIndicator={true}
+                  nestedScrollEnabled={true}>
+                  {modalCurrentPageData.map((item, index) => (
+                    <View
+                      key={`${item?.packagingListNo || index}-${index}`}
+                      style={[
+                        styles.compactModalTableRow,
+                        index % 2 === 0 && styles.compactModalTableRowAlt,
+                      ]}>
+                      <View
+                        style={[styles.compactBodyCell, styles.compactDocCol]}>
+                        <View style={styles.compactDocTopRow}>
+                          <Text style={styles.compactSerialBadge}>
                             {(modalCurrentPage - 1) * modalItemsPerPage +
                               index +
                               1}
                           </Text>
 
                           <Text
-                            style={[
-                              styles.rowText,
-                              styles.modalPackingText,
-                              {width: 125},
-                            ]}
+                            style={styles.compactPackingNo}
                             numberOfLines={1}>
                             {item.packagingListNo || '-'}
                           </Text>
-
-                          <View
-                            style={[
-                              styles.columnStack,
-                              styles.modalColumnStack,
-                              {width: 185},
-                            ]}>
-                            <Text
-                              style={styles.modalUpperText}
-                              numberOfLines={1}>
-                              {item.customerName || '-'}
-                            </Text>
-                            <Text
-                              style={styles.modalLowerText}
-                              numberOfLines={1}>
-                              {item.departmentName || '-'}
-                            </Text>
-                          </View>
-
-                          <View
-                            style={[
-                              styles.columnStack,
-                              styles.modalColumnStack,
-                              {width: 110},
-                            ]}>
-                            <Text
-                              style={[
-                                styles.modalUpperText,
-                                styles.modalValueText,
-                              ]}
-                              numberOfLines={1}>
-                              {item.totalValue
-                                ? item.totalValue.toLocaleString()
-                                : '0'}
-                            </Text>
-                            <Text
-                              style={styles.modalLowerText}
-                              numberOfLines={1}>
-                              {item.noOfPcs
-                                ? item.noOfPcs.toLocaleString()
-                                : '0'}{' '}
-                              pcs
-                            </Text>
-                          </View>
-
-                          <Text
-                            style={[
-                              styles.rowText,
-                              styles.modalDateCell,
-                              {width: 120},
-                            ]}
-                            numberOfLines={1}>
-                            {item.exFacDate
-                              ? item.exFacDate.split('T')[0]
-                              : '-'}
-                          </Text>
                         </View>
-                      ))}
+
+                        <Text
+                          style={styles.compactCustomerText}
+                          numberOfLines={1}>
+                          {item.customerName || '-'}
+                        </Text>
+
+                        <Text style={styles.compactDeptText} numberOfLines={1}>
+                          {item.departmentName || '-'}
+                        </Text>
+                      </View>
+
+                      <View
+                        style={[
+                          styles.compactBodyCell,
+                          styles.compactValueCol,
+                        ]}>
+                        <Text style={styles.compactValueText} numberOfLines={1}>
+                          {item.totalValue
+                            ? item.totalValue.toLocaleString()
+                            : '0'}
+                        </Text>
+
+                        <Text style={styles.compactPcsText} numberOfLines={1}>
+                          {item.noOfPcs ? item.noOfPcs.toLocaleString() : '0'}{' '}
+                          pcs
+                        </Text>
+                      </View>
+
+                      <View
+                        style={[styles.compactBodyCell, styles.compactDateCol]}>
+                        <Text style={styles.compactDateText} numberOfLines={2}>
+                          {item.exFacDate ? item.exFacDate.split('T')[0] : '-'}
+                        </Text>
+                      </View>
                     </View>
-                  </ScrollView>
+                  ))}
                 </ScrollView>
               </View>
 
               {renderModalPagination()}
-            </>
+            </View>
           ) : (
             <View style={styles.modalEmptyCard}>
               <Text style={styles.modalEmptyIcon}>📭</Text>
@@ -2724,11 +2647,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   paginationContainer: {
-    paddingHorizontal: 16,
-    paddingVertical: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     borderTopWidth: 1,
     borderTopColor: '#1e293b',
-    marginTop: 16,
+    marginTop: 6,
   },
   paginationInfo: {
     alignItems: 'center',
@@ -3155,10 +3078,15 @@ const styles = StyleSheet.create({
     backgroundColor: '#0b1220',
     borderRadius: 24,
     width: '96%',
-    maxHeight: '90%',
+    height: '90%',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)',
     overflow: 'hidden',
+  },
+  modalResultBody: {
+    flex: 1,
+    minHeight: 0,
+    paddingBottom: 8,
   },
   detailsModalHeader: {
     flexDirection: 'row',
@@ -3377,6 +3305,8 @@ const styles = StyleSheet.create({
     color: '#34d399',
   },
   modalTableShell: {
+    flex: 1,
+    minHeight: 0,
     marginHorizontal: 16,
     marginTop: 2,
     backgroundColor: '#0f172a',
@@ -3474,6 +3404,123 @@ const styles = StyleSheet.create({
     color: '#94a3b8',
     fontSize: 11,
     marginTop: 5,
+  },
+  compactModalTableHeader: {
+    flexDirection: 'row',
+    minHeight: 42,
+    backgroundColor: '#16213d',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(148,163,184,0.20)',
+  },
+
+  compactHeaderCell: {
+    justifyContent: 'center',
+    paddingHorizontal: 7,
+    borderRightWidth: 1,
+    borderRightColor: 'rgba(148,163,184,0.12)',
+  },
+
+  compactHeaderText: {
+    color: '#cbd5e1',
+    fontSize: 9,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+
+  compactModalTableBody: {
+    flex: 1,
+    minHeight: 0,
+  },
+
+  compactModalTableRow: {
+    flexDirection: 'row',
+    minHeight: 66,
+    backgroundColor: '#0f172a',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(148,163,184,0.10)',
+  },
+
+  compactModalTableRowAlt: {
+    backgroundColor: '#111c31',
+  },
+
+  compactBodyCell: {
+    justifyContent: 'center',
+    paddingHorizontal: 7,
+    paddingVertical: 8,
+    borderRightWidth: 1,
+    borderRightColor: 'rgba(148,163,184,0.08)',
+  },
+
+  compactDocCol: {
+    flex: 1.55,
+  },
+
+  compactValueCol: {
+    flex: 0.9,
+  },
+
+  compactDateCol: {
+    flex: 0.78,
+  },
+
+  compactDocTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+
+  compactSerialBadge: {
+    minWidth: 22,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: 'rgba(59,130,246,0.18)',
+    color: '#93c5fd',
+    fontSize: 9,
+    fontWeight: '900',
+    textAlign: 'center',
+    lineHeight: 20,
+    marginRight: 5,
+  },
+
+  compactPackingNo: {
+    flex: 1,
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+
+  compactCustomerText: {
+    color: '#93c5fd',
+    fontSize: 10,
+    fontWeight: '800',
+    marginBottom: 2,
+  },
+
+  compactDeptText: {
+    color: '#94a3b8',
+    fontSize: 9,
+    fontWeight: '700',
+  },
+
+  compactValueText: {
+    color: '#34d399',
+    fontSize: 10,
+    fontWeight: '900',
+    marginBottom: 4,
+  },
+
+  compactPcsText: {
+    color: '#cbd5e1',
+    fontSize: 9,
+    fontWeight: '700',
+  },
+
+  compactDateText: {
+    color: '#86efac',
+    fontSize: 9,
+    fontWeight: '900',
+    lineHeight: 13,
   },
 });
 

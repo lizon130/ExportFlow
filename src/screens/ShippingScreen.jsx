@@ -137,7 +137,14 @@ const ShippingScreen = () => {
 
     try {
       const response = await fetch(
-        `${API_BASE_URL}/api/Export/GetBy_DepartmentName_Wise_ExpoDoc_Completed_Total_Count`,
+        `${API_BASE_URL}/api/Export/Get-Pending-Shipping-Date-Count`,
+        {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+          },
+        },
       );
 
       if (!response.ok) {
@@ -153,15 +160,31 @@ const ShippingScreen = () => {
         dataArray = [data];
       }
 
-      const pendingShippingDepartments = dataArray.filter(
-        item => (item?.pendingShipping || 0) > 0,
-      );
+      // New API returns department-wise shipping pending rows.
+      // Show one card per department where pendingShippingDateCount > 0.
+      const pendingShippingDepartments = dataArray
+        .filter(item => (item?.pendingShippingDateCount || 0) > 0)
+        .map(item => ({
+          ...item,
+
+          // IMPORTANT: map new API field to old UI field
+          pendingShipping: item?.pendingShippingDateCount || 0,
+
+          customerName: item?.customerName || item?.departmentName || 'Unknown',
+          departmentName: item?.departmentName || item?.departmentCode || '-',
+          departmentCode: item?.departmentCode || '',
+          totalValue: item?.totalValue || 0,
+        }))
+        .sort(
+          (a, b) => (b?.pendingShipping || 0) - (a?.pendingShipping || 0),
+        );
 
       setShippingSummaryData(pendingShippingDepartments);
       setShippingCurrentPage(1);
     } catch (fetchError) {
       console.error('Error fetching pending shipping summary:', fetchError);
       setShippingSummaryData([]);
+      setShippingCurrentPage(1);
       setError(`Network error: ${fetchError.message}`);
     } finally {
       setShippingLoading(false);
@@ -277,10 +300,9 @@ const ShippingScreen = () => {
     setModalSearchText('');
 
     try {
-      let url = `${API_BASE_URL}/api/Export/by-dept-Shipping_DateList`;
-      if (deptCode) {
-        url += `?depName=${encodeURIComponent(deptCode)}`;
-      }
+      let url = `${API_BASE_URL}/api/Export/Get-By-Dept-Shipping-Date-List?depName=${encodeURIComponent(
+        deptCode || '',
+      )}`;
 
       const response = await fetch(url, {
         method: 'GET',
@@ -320,9 +342,14 @@ const ShippingScreen = () => {
   };
 
   const handleCardClick = async item => {
-    setModalDepartmentName(getDisplayName(item));
+    const displayTitle =
+      item?.customerName && item?.departmentName
+        ? `${item.customerName} • ${item.departmentName}`
+        : getDisplayName(item);
+
+    setModalDepartmentName(displayTitle);
     setShowDetailsModal(true);
-    await fetchModalShippingData(item?.departmentCode, getDisplayName(item));
+    await fetchModalShippingData(item?.departmentCode, displayTitle);
   };
 
   const handleModalSearch = text => {
@@ -834,184 +861,125 @@ const ShippingScreen = () => {
             </View>
           ) : modalCurrentPageData.length > 0 ? (
             <>
-              <View style={styles.modalTableShell}>
-                <ScrollView
-                  style={styles.modalTableVerticalScroll}
-                  showsVerticalScrollIndicator={true}>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={true}>
-                    <View>
+              <View style={styles.modalResultBody}>
+                <View style={styles.modalTableShell}>
+                  <View style={styles.compactModalTableHeader}>
+                    <View
+                      style={[styles.compactHeaderCell, styles.compactDocCol]}>
+                      <Text style={styles.compactHeaderText}>Document</Text>
+                    </View>
+
+                    <View
+                      style={[
+                        styles.compactHeaderCell,
+                        styles.compactValueCol,
+                      ]}>
+                      <Text style={styles.compactHeaderText}>Qty / Value</Text>
+                    </View>
+
+                    <View
+                      style={[styles.compactHeaderCell, styles.compactDateCol]}>
+                      <Text style={styles.compactHeaderText}>Ex-Factory</Text>
+                    </View>
+                  </View>
+
+                  <ScrollView
+                    style={styles.compactModalTableBody}
+                    showsVerticalScrollIndicator={true}
+                    nestedScrollEnabled={true}>
+                    {modalCurrentPageData.map((item, index) => (
                       <View
-                        style={[styles.tableHeader, styles.modalTableHeader]}>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 70},
-                          ]}>
-                          Sl No
-                        </Text>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 120},
-                          ]}>
-                          Packing No
-                        </Text>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 150},
-                          ]}>
-                          Export Doc No
-                        </Text>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 145},
-                          ]}>
-                          Customer/Dept
-                        </Text>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 105},
-                          ]}>
-                          Carton/Pcs
-                        </Text>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 110},
-                          ]}>
-                          Value
-                        </Text>
-                        <Text
-                          style={[
-                            styles.headerText,
-                            styles.modalHeaderText,
-                            {width: 120},
-                          ]}>
-                          Ex-Factory Date
-                        </Text>
-                      </View>
-
-                      {modalCurrentPageData.map((item, index) => (
+                        key={`${item?.packagingListNo || index}-${index}`}
+                        style={[
+                          styles.compactModalTableRow,
+                          index % 2 === 0 && styles.compactModalTableRowAlt,
+                        ]}>
                         <View
-                          key={`${item?.packagingListNo || index}-${index}`}
                           style={[
-                            styles.tableRow,
-                            styles.modalTableRow,
-                            index % 2 === 0 && styles.modalTableRowAlt,
+                            styles.compactBodyCell,
+                            styles.compactDocCol,
                           ]}>
-                          <Text
-                            style={[
-                              styles.rowText,
-                              styles.modalRowText,
-                              styles.modalSerialCell,
-                              {width: 70},
-                            ]}>
-                            {(modalCurrentPage - 1) * modalItemsPerPage +
-                              index +
-                              1}
-                          </Text>
+                          <View style={styles.compactDocTopRow}>
+                            <Text style={styles.compactSerialBadge}>
+                              {(modalCurrentPage - 1) * modalItemsPerPage +
+                                index +
+                                1}
+                            </Text>
+
+                            <Text
+                              style={styles.compactPackingNo}
+                              numberOfLines={1}>
+                              {item.packagingListNo || '-'}
+                            </Text>
+                          </View>
 
                           <Text
-                            style={[
-                              styles.rowText,
-                              styles.modalPackingText,
-                              {width: 120},
-                            ]}
-                            numberOfLines={1}>
-                            {item.packagingListNo || '-'}
-                          </Text>
-
-                          <Text
-                            style={[
-                              styles.rowText,
-                              styles.modalRowText,
-                              {width: 150},
-                            ]}
+                            style={styles.compactExportNo}
                             numberOfLines={1}>
                             {item.expDocumentNo || '-'}
                           </Text>
 
-                          <View
-                            style={[
-                              styles.columnStack,
-                              styles.modalColumnStack,
-                              {width: 145},
-                            ]}>
-                            <Text
-                              style={styles.modalUpperText}
-                              numberOfLines={1}>
-                              {item.customerName || '-'}
-                            </Text>
-                            <Text
-                              style={styles.modalLowerText}
-                              numberOfLines={1}>
-                              {item.departmentName || '-'}
-                            </Text>
-                          </View>
-
-                          <View
-                            style={[
-                              styles.columnStack,
-                              styles.modalColumnStack,
-                              {width: 105},
-                            ]}>
-                            <Text
-                              style={styles.modalUpperText}
-                              numberOfLines={1}>
-                              {item.noOfCarton
-                                ? item.noOfCarton.toLocaleString()
-                                : '0'}
-                            </Text>
-                            <Text
-                              style={styles.modalLowerText}
-                              numberOfLines={1}>
-                              {item.noOfPcs
-                                ? item.noOfPcs.toLocaleString()
-                                : '0'}{' '}
-                              pcs
-                            </Text>
-                          </View>
+                          <Text
+                            style={styles.compactCustomerText}
+                            numberOfLines={1}>
+                            {item.customerName || '-'}
+                          </Text>
 
                           <Text
-                            style={[
-                              styles.rowText,
-                              styles.modalValueText,
-                              {width: 110},
-                            ]}
+                            style={styles.compactDeptText}
+                            numberOfLines={1}>
+                            {item.departmentName || '-'}
+                          </Text>
+                        </View>
+
+                        <View
+                          style={[
+                            styles.compactBodyCell,
+                            styles.compactValueCol,
+                          ]}>
+                          <Text
+                            style={styles.compactCartonText}
+                            numberOfLines={1}>
+                            {item.noOfCarton
+                              ? item.noOfCarton.toLocaleString()
+                              : '0'}{' '}
+                            ctn
+                          </Text>
+
+                          <Text style={styles.compactPcsText} numberOfLines={1}>
+                            {item.noOfPcs ? item.noOfPcs.toLocaleString() : '0'}{' '}
+                            pcs
+                          </Text>
+
+                          <Text
+                            style={styles.compactValueText}
                             numberOfLines={1}>
                             {item.totalValue
                               ? item.totalValue.toLocaleString()
                               : '0'}
                           </Text>
+                        </View>
 
+                        <View
+                          style={[
+                            styles.compactBodyCell,
+                            styles.compactDateCol,
+                          ]}>
                           <Text
-                            style={[
-                              styles.rowText,
-                              styles.modalDateCell,
-                              {width: 120},
-                            ]}
-                            numberOfLines={1}>
+                            style={styles.compactDateText}
+                            numberOfLines={2}>
                             {item.exFacDate
                               ? item.exFacDate.split('T')[0]
                               : '-'}
                           </Text>
                         </View>
-                      ))}
-                    </View>
+                      </View>
+                    ))}
                   </ScrollView>
-                </ScrollView>
-              </View>
+                </View>
 
-              {renderModalPagination()}
+                {renderModalPagination()}
+              </View>
             </>
           ) : (
             <View style={styles.modalEmptyCard}>
@@ -1152,7 +1120,7 @@ const ShippingScreen = () => {
           <View>
             <Text style={styles.sectionTitle}>🚢 Shipping Summary</Text>
             <Text style={styles.summaryHeaderSubText}>
-              Pending shipping by active department
+              Overview by active department
             </Text>
           </View>
 
@@ -1184,7 +1152,7 @@ const ShippingScreen = () => {
 
             <Text style={styles.statValue}>{totalDepartmentCount}</Text>
             <Text style={styles.statTitle}>Departments</Text>
-            <Text style={styles.statSubLabel}>With pending shipping</Text>
+            <Text style={styles.statSubLabel}>Departments with pending shipping</Text>
           </View>
 
           <View style={[styles.statCardPremium, styles.totalDocsStatCard]}>
@@ -1381,7 +1349,7 @@ const ShippingScreen = () => {
             <Text style={styles.emptyStateIcon}>✅</Text>
             <Text style={styles.emptyStateText}>No pending shipping found</Text>
             <Text style={styles.emptyStateSubText}>
-              All departments are up to date
+              No pending shipping dates found
             </Text>
           </View>
         )}
@@ -2254,7 +2222,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#0b1220',
     borderRadius: 24,
     width: '96%',
-    maxHeight: '90%',
+    height: '92%',
+    maxHeight: '92%',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)',
     overflow: 'hidden',
@@ -2391,8 +2360,15 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '900',
   },
+  modalResultBody: {
+    flex: 1,
+    minHeight: 0,
+    paddingBottom: 0,
+  },
   modalTableShell: {
-    marginHorizontal: 16,
+    flex: 1,
+    minHeight: 150,
+    marginHorizontal: 12,
     marginTop: 2,
     backgroundColor: '#0f172a',
     borderRadius: 16,
@@ -2460,6 +2436,121 @@ const styles = StyleSheet.create({
     color: '#86efac',
     fontSize: 10,
     fontWeight: '800',
+  },
+
+  // ========== COMPACT MOBILE MODAL TABLE ==========
+  compactModalTableHeader: {
+    flexDirection: 'row',
+    minHeight: 42,
+    backgroundColor: '#16213d',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(148,163,184,0.20)',
+  },
+  compactHeaderCell: {
+    justifyContent: 'center',
+    paddingHorizontal: 7,
+    borderRightWidth: 1,
+    borderRightColor: 'rgba(148,163,184,0.12)',
+  },
+  compactHeaderText: {
+    color: '#cbd5e1',
+    fontSize: 9,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    letterSpacing: 0.2,
+  },
+  compactModalTableBody: {
+    flex: 1,
+    minHeight: 0,
+  },
+  compactModalTableRow: {
+    flexDirection: 'row',
+    minHeight: 74,
+    backgroundColor: '#0f172a',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(148,163,184,0.10)',
+  },
+  compactModalTableRowAlt: {
+    backgroundColor: '#111c31',
+  },
+  compactBodyCell: {
+    justifyContent: 'center',
+    paddingHorizontal: 7,
+    paddingVertical: 8,
+    borderRightWidth: 1,
+    borderRightColor: 'rgba(148,163,184,0.08)',
+  },
+  compactDocCol: {
+    flex: 1.55,
+  },
+  compactValueCol: {
+    flex: 0.9,
+  },
+  compactDateCol: {
+    flex: 0.78,
+  },
+  compactDocTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  compactSerialBadge: {
+    minWidth: 22,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: 'rgba(59,130,246,0.18)',
+    color: '#93c5fd',
+    fontSize: 9,
+    fontWeight: '900',
+    textAlign: 'center',
+    lineHeight: 20,
+    marginRight: 5,
+  },
+  compactPackingNo: {
+    flex: 1,
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  compactExportNo: {
+    color: '#c4b5fd',
+    fontSize: 9,
+    fontWeight: '800',
+    marginBottom: 3,
+  },
+  compactCustomerText: {
+    color: '#93c5fd',
+    fontSize: 10,
+    fontWeight: '800',
+    marginBottom: 2,
+  },
+  compactDeptText: {
+    color: '#94a3b8',
+    fontSize: 9,
+    fontWeight: '700',
+  },
+  compactCartonText: {
+    color: '#f8fafc',
+    fontSize: 10,
+    fontWeight: '900',
+    marginBottom: 3,
+  },
+  compactPcsText: {
+    color: '#cbd5e1',
+    fontSize: 9,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  compactValueText: {
+    color: '#34d399',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  compactDateText: {
+    color: '#86efac',
+    fontSize: 9,
+    fontWeight: '900',
+    lineHeight: 13,
   },
   modalLoaderCard: {
     margin: 16,

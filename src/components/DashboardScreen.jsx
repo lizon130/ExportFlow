@@ -37,6 +37,15 @@ const DashboardScreen = ({onNavigate, userData}) => {
     pendingBankSubmissionDateCount: 0,
   });
 
+  const [realizationStats, setRealizationStats] = useState({
+    expectedValue: 0,
+    realizedValue: 0,
+    pendingValue: 0,
+    upcomingValue: 0,
+    overdueValue: 0,
+    realizedPercent: 0,
+  });
+
   const API_BASE_URL = 'http://192.168.9.45:7000';
   const isMounted = useRef(true);
 
@@ -51,6 +60,35 @@ const DashboardScreen = ({onNavigate, userData}) => {
       timeout: 10000,
     }),
   );
+
+  const normalizeArray = data => {
+    if (Array.isArray(data)) {
+      return data;
+    }
+
+    if (data && typeof data === 'object') {
+      return [data];
+    }
+
+    return [];
+  };
+
+  const getNumber = value => {
+    const numberValue = Number(value || 0);
+    return Number.isFinite(numberValue) ? numberValue : 0;
+  };
+
+  const sumTotalValue = data => {
+    return normalizeArray(data).reduce(
+      (sum, item) =>
+        sum +
+        (getNumber(item?.totalValue) ||
+          getNumber(item?.totalExportValue) ||
+          getNumber(item?.totalNetValue) ||
+          0),
+      0,
+    );
+  };
 
   // Add interceptors only once
   useEffect(() => {
@@ -109,21 +147,21 @@ const DashboardScreen = ({onNavigate, userData}) => {
 
       // Get packing list count
       const packingResponse = await apiClientRef.current.get(
-        '/api/Export/Get_Packing-No-Total-count',
+        '/api/Export/Get-Packing-No-Total-count',
         {headers},
       );
       const packingData = packingResponse.data;
 
       // Get completed export count
       const completedResponse = await apiClientRef.current.get(
-        '/api/Export/Get_Completed_ExportDocument_Count',
+        '/api/Export/Get-Completed-Export-Document-Count',
         {headers},
       );
       const completedData = completedResponse.data;
 
-      // Get pending export count from separate API
+      // Get pending export count from department-wise API and sum all rows
       const pendingResponse = await apiClientRef.current.get(
-        '/api/Export/Get_Pending_ExportDocument_Count',
+        '/api/Export/Get-Pending-Export-Document-Count',
         {headers},
       );
       const pendingData = pendingResponse.data;
@@ -138,10 +176,12 @@ const DashboardScreen = ({onNavigate, userData}) => {
           ? completedData[0].completedExportCount || 0
           : 0;
 
-      const pendingCount =
-        Array.isArray(pendingData) && pendingData.length > 0
-          ? pendingData[0].pendingExportCount || 0
-          : 0;
+      const pendingCount = Array.isArray(pendingData)
+        ? pendingData.reduce(
+            (sum, item) => sum + (item?.pendingExportCount || 0),
+            0,
+          )
+        : 0;
 
       if (isMounted.current) {
         setExportStats(prev => ({
@@ -175,14 +215,14 @@ const DashboardScreen = ({onNavigate, userData}) => {
 
       // Get completed BL date count
       const completedResponse = await apiClientRef.current.get(
-        '/api/Export/Get_Completed_BLDateCount',
+        '/api/Export/Get-Completed-BL-Date-Count',
         {headers},
       );
       const completedData = completedResponse.data;
 
-      // Get pending BL date count from separate API
+      // Get pending BL date count from department-wise API and sum all rows
       const pendingResponse = await apiClientRef.current.get(
-        '/api/Export/Get_Pending_BL_Date_Count',
+        '/api/Export/Get-Pending-BL-Date-Count',
         {headers},
       );
       const pendingData = pendingResponse.data;
@@ -192,10 +232,12 @@ const DashboardScreen = ({onNavigate, userData}) => {
           ? completedData[0].completedBLDateCount || 0
           : 0;
 
-      const pendingCount =
-        Array.isArray(pendingData) && pendingData.length > 0
-          ? pendingData[0].pendingBLDateCount || 0
-          : 0;
+      const pendingCount = Array.isArray(pendingData)
+        ? pendingData.reduce(
+            (sum, item) => sum + (item?.pendingBLDateCount || 0),
+            0,
+          )
+        : 0;
 
       if (isMounted.current) {
         setExportStats(prev => ({
@@ -226,14 +268,14 @@ const DashboardScreen = ({onNavigate, userData}) => {
 
       // Get completed shipping date count
       const completedResponse = await apiClientRef.current.get(
-        '/api/Export/Get_Completed_Export_ShippingDateCount',
+        '/api/Export/Get-Completed-Export-Shipping-Date-Count',
         {headers},
       );
       const completedData = completedResponse.data;
 
-      // Get pending shipping date count from separate API
+      // Get pending shipping date count from department-wise API and sum all rows
       const pendingResponse = await apiClientRef.current.get(
-        '/api/Export/Get_Pending_ShippingDate_Count',
+        '/api/Export/Get-Pending-Shipping-Date-Count',
         {headers},
       );
       const pendingData = pendingResponse.data;
@@ -243,10 +285,12 @@ const DashboardScreen = ({onNavigate, userData}) => {
           ? completedData[0].completedExportShippingDateCount || 0
           : 0;
 
-      const pendingCount =
-        Array.isArray(pendingData) && pendingData.length > 0
-          ? pendingData[0].pendingShippingDateCount || 0
-          : 0;
+      const pendingCount = Array.isArray(pendingData)
+        ? pendingData.reduce(
+            (sum, item) => sum + (item?.pendingShippingDateCount || 0),
+            0,
+          )
+        : 0;
 
       if (isMounted.current) {
         setExportStats(prev => ({
@@ -277,14 +321,14 @@ const DashboardScreen = ({onNavigate, userData}) => {
 
       // Get completed bank submission date count
       const completedResponse = await apiClientRef.current.get(
-        '/api/Export/Get_Completed_BankSubmission_DateCount',
+        '/api/Export/Get-Completed-Bank-Submission-Date-Count',
         {headers},
       );
       const completedData = completedResponse.data;
 
-      // Get pending bank submission date count from separate API
+      // Get pending bank submission date count from department-wise API and sum all rows
       const pendingResponse = await apiClientRef.current.get(
-        '/api/Export/Get_Pending_BankSubmission_DateCount',
+        '/api/Export/Get-Pending-Bank-Submission-Date-Count',
         {headers},
       );
       const pendingData = pendingResponse.data;
@@ -294,10 +338,12 @@ const DashboardScreen = ({onNavigate, userData}) => {
           ? completedData[0].completedBankSubmissionDateCount || 0
           : 0;
 
-      const pendingCount =
-        Array.isArray(pendingData) && pendingData.length > 0
-          ? pendingData[0].pendingBankSubmissionDateCount || 0
-          : 0;
+      const pendingCount = Array.isArray(pendingData)
+        ? pendingData.reduce(
+            (sum, item) => sum + (item?.pendingBankSubmissionDateCount || 0),
+            0,
+          )
+        : 0;
 
       if (isMounted.current) {
         setExportStats(prev => ({
@@ -318,6 +364,72 @@ const DashboardScreen = ({onNavigate, userData}) => {
     }
   }, [userData?.accessToken]);
 
+  // Fetch Realization Stats
+  const fetchRealizationStats = useCallback(async () => {
+    try {
+      const headers = {};
+      if (userData?.accessToken) {
+        headers.Authorization = `Bearer ${userData.accessToken}`;
+      }
+
+      const [
+        expectedResponse,
+        realizedResponse,
+        upcomingResponse,
+        overdueResponse,
+      ] = await Promise.all([
+        apiClientRef.current.get(
+          '/api/Export/Get-Pending-Realization-Expected-Date-Count',
+          {headers},
+        ),
+        apiClientRef.current.get(
+          '/api/Export/Get-Completed-Realization-Date-Count',
+          {headers},
+        ),
+        apiClientRef.current.get(
+          '/api/Export/Get-Pending-Realization-Upcomming-Date-Count',
+          {headers},
+        ),
+        apiClientRef.current.get(
+          '/api/Export/Get-Pending-Realization-OverDue-Date-Count',
+          {headers},
+        ),
+      ]);
+
+      const expectedValue = sumTotalValue(expectedResponse.data);
+      const realizedValue = sumTotalValue(realizedResponse.data);
+      const upcomingValue = sumTotalValue(upcomingResponse.data);
+      const overdueValue = sumTotalValue(overdueResponse.data);
+      const pendingValue = upcomingValue + overdueValue;
+
+      const realizedPercent = expectedValue
+        ? Math.min(100, Math.round((realizedValue / expectedValue) * 100))
+        : 0;
+
+      if (isMounted.current) {
+        setRealizationStats({
+          expectedValue,
+          realizedValue,
+          pendingValue,
+          upcomingValue,
+          overdueValue,
+          realizedPercent,
+        });
+      }
+
+      console.log('Realization Stats:', {
+        expectedValue,
+        realizedValue,
+        upcomingValue,
+        overdueValue,
+        pendingValue,
+        realizedPercent,
+      });
+    } catch (error) {
+      console.error('Error fetching realization stats:', error);
+    }
+  }, [userData?.accessToken]);
+
   // Fetch all dashboard data - wrapped in useCallback with stable dependencies
   const fetchDashboardData = useCallback(async () => {
     setLoading(true);
@@ -328,6 +440,7 @@ const DashboardScreen = ({onNavigate, userData}) => {
         fetchBLDateStats(),
         fetchShippingStats(),
         fetchBankSubmitStats(),
+        fetchRealizationStats(),
       ]);
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
@@ -341,6 +454,7 @@ const DashboardScreen = ({onNavigate, userData}) => {
     fetchBLDateStats,
     fetchShippingStats,
     fetchBankSubmitStats,
+    fetchRealizationStats,
   ]);
 
   // Initial load - with proper dependency array
@@ -412,16 +526,41 @@ const DashboardScreen = ({onNavigate, userData}) => {
     },
   ];
 
-  // Realization Tracking (mock data - replace with actual API when available)
+  const formatCurrency = value => {
+    const numberValue = Number(value || 0);
+
+    if (!Number.isFinite(numberValue)) {
+      return '$0';
+    }
+
+    const absValue = Math.abs(numberValue);
+
+    if (absValue >= 1000000000) {
+      return `$${(numberValue / 1000000000).toFixed(1)}B`;
+    }
+
+    if (absValue >= 1000000) {
+      return `$${(numberValue / 1000000).toFixed(1)}M`;
+    }
+
+    if (absValue >= 1000) {
+      return `$${(numberValue / 1000).toFixed(1)}K`;
+    }
+
+    return `$${numberValue.toLocaleString('en-US', {
+      maximumFractionDigits: 0,
+    })}`;
+  };
+
   const realizationTracking = {
     title: 'Realization Tracking',
-    realized: '$2.1M',
-    pending: '$1.7M',
-    total: '$3.8M',
-    percentage: 55,
-    trend: '+12% from last month',
-    target: '$4.5M',
-    remaining: '$0.7M',
+    expected: formatCurrency(realizationStats.expectedValue),
+    realized: formatCurrency(realizationStats.realizedValue),
+    pending: formatCurrency(realizationStats.pendingValue),
+    percentage: realizationStats.realizedPercent,
+    trend: `${realizationStats.realizedPercent}% realized`,
+    upcoming: formatCurrency(realizationStats.upcomingValue),
+    overdue: formatCurrency(realizationStats.overdueValue),
   };
 
   // Show skeleton while loading
@@ -462,12 +601,18 @@ const DashboardScreen = ({onNavigate, userData}) => {
       </View>
 
       {/* Full Width Realization Tracking Card */}
-      <View style={styles.fullWidthCard}>
+      {/* Full Width Realization Tracking Card */}
+      <TouchableOpacity
+        style={styles.fullWidthCard}
+        activeOpacity={0.85}
+        onPress={() => handleCardPress('realization')}>
         <View style={styles.fullWidthHeader}>
           <View style={styles.fullWidthIcon}>
             <Text style={styles.fullWidthIconText}>💰</Text>
           </View>
+
           <Text style={styles.fullWidthTitle}>{realizationTracking.title}</Text>
+
           <View style={styles.fullWidthBadge}>
             <Text style={styles.fullWidthBadgeText}>
               {realizationTracking.trend}
@@ -477,23 +622,27 @@ const DashboardScreen = ({onNavigate, userData}) => {
 
         <View style={styles.realizationStats}>
           <View style={styles.realizationItem}>
+            <Text style={styles.realizationLabel}>Expected</Text>
+            <Text style={styles.realizationValue}>
+              {realizationTracking.expected}
+            </Text>
+          </View>
+
+          <View style={styles.realizationDivider} />
+
+          <View style={styles.realizationItem}>
             <Text style={styles.realizationLabel}>Realized</Text>
             <Text style={styles.realizationValue}>
               {realizationTracking.realized}
             </Text>
           </View>
+
           <View style={styles.realizationDivider} />
+
           <View style={styles.realizationItem}>
             <Text style={styles.realizationLabel}>Pending</Text>
             <Text style={styles.realizationValue}>
               {realizationTracking.pending}
-            </Text>
-          </View>
-          <View style={styles.realizationDivider} />
-          <View style={styles.realizationItem}>
-            <Text style={styles.realizationLabel}>Total</Text>
-            <Text style={styles.realizationValue}>
-              {realizationTracking.total}
             </Text>
           </View>
         </View>
@@ -508,6 +657,7 @@ const DashboardScreen = ({onNavigate, userData}) => {
               ]}
             />
           </View>
+
           <Text style={styles.progressText}>
             {realizationTracking.percentage}% Realized
           </Text>
@@ -515,13 +665,14 @@ const DashboardScreen = ({onNavigate, userData}) => {
 
         <View style={styles.fullWidthFooter}>
           <Text style={styles.fullWidthFooterText}>
-            Target: {realizationTracking.target} by Q2
+            Upcoming: {realizationTracking.upcoming}
           </Text>
+
           <Text style={styles.fullWidthFooterText}>
-            Remaining: {realizationTracking.remaining}
+            Overdue: {realizationTracking.overdue}
           </Text>
         </View>
-      </View>
+      </TouchableOpacity>
 
       {/* Chart Placeholder */}
       <View style={styles.chartContainer}>
