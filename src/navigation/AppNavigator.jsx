@@ -22,6 +22,9 @@ import BankSubmitScreen from '../screens/BankSubmitScreen';
 import RealizationScreen from '../screens/RealizationScreen';
 import NotificationScreen from '../screens/NotificationScreen'; // Add this
 
+import {registerFCMToken} from '../services/NotificationService';
+import messaging from '@react-native-firebase/messaging';
+
 // Import notifications data
 import {notifications} from '../data/mockData';
 
@@ -36,6 +39,29 @@ const AppNavigator = ({onLogout, userData}) => {
   const [navigationHistory, setNavigationHistory] = useState(['dashboard']);
 
   const isNavigating = useRef(false);
+
+  useEffect(() => {
+  if (userData) {
+    registerFCMToken(userData);
+  }
+}, [userData]);
+
+useEffect(() => {
+  const unsubscribe = messaging().onMessage(async remoteMessage => {
+    console.log('FCM FOREGROUND RECEIVED:', JSON.stringify(remoteMessage));
+
+    Alert.alert(
+      remoteMessage?.notification?.title ||
+        remoteMessage?.data?.title ||
+        'Notification',
+      remoteMessage?.notification?.body ||
+        remoteMessage?.data?.body ||
+        'No message',
+    );
+  });
+
+  return unsubscribe;
+}, []);
 
   const unreadCount = notifications.filter(n => n.unread).length;
 
@@ -140,7 +166,7 @@ const AppNavigator = ({onLogout, userData}) => {
       if (showNotificationScreen) {
         setShowNotificationScreen(false);
         return true;
-      }
+      } 
 
       // Close notifications modal if open
       if (showNotifications) {
