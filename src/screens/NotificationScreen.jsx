@@ -1,4 +1,4 @@
-import React, {useState, useEffect} from 'react';
+import React, {useState, useEffect, useCallback} from 'react';
 import {
   View,
   Text,
@@ -9,51 +9,58 @@ import {
   StatusBar,
   RefreshControl,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const NotificationScreen = ({onClose, onNotificationPress}) => {
+import {
+  getNotifications,
+  markNotificationRead,
+  markAllNotificationsRead,
+} from '../services/notificationStorage';
+
+const NotificationScreen = ({onClose, onNotificationPress, onRefreshCount}) => {
   const [notifications, setNotifications] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    loadNotifications();
+  const removeDuplicateNotifications = items => {
+    const seen = new Set();
 
-    // Set up interval to refresh notifications every 5 seconds
-    const interval = setInterval(() => {
-      loadNotifications();
-    }, 5000);
+    return items.filter((item, index) => {
+      const uniqueKey = item?.id
+        ? `${item.id}-${item.timestamp || ''}`
+        : `no-id-${index}`;
 
-    return () => clearInterval(interval);
-  }, []);
+      if (seen.has(uniqueKey)) {
+        return false;
+      }
 
-  const loadNotifications = async () => {
+      seen.add(uniqueKey);
+      return true;
+    });
+  };
+
+  const loadNotifications = useCallback(async () => {
     try {
-      const saved = await AsyncStorage.getItem('app_notifications');
-      if (saved) {
-        const parsedNotifications = JSON.parse(saved);
-        setNotifications(parsedNotifications);
-      } else {
-        // Default welcome notification
-        const defaultNotifications = [
-          {
-            id: Date.now().toString(),
-            title: 'Welcome to ExportFlow',
-            message: 'You will receive live notifications for export updates',
-            type: 'info',
-            timestamp: new Date().toISOString(),
-            unread: false,
-          },
-        ];
-        setNotifications(defaultNotifications);
-        await AsyncStorage.setItem(
-          'app_notifications',
-          JSON.stringify(defaultNotifications),
-        );
+      const saved = await getNotifications();
+      const cleanNotifications = removeDuplicateNotifications(saved);
+
+      setNotifications(cleanNotifications);
+
+      if (onRefreshCount) {
+        onRefreshCount();
       }
     } catch (error) {
       console.error('Error loading notifications:', error);
     }
-  };
+  }, [onRefreshCount]);
+
+  useEffect(() => {
+    loadNotifications();
+
+    const interval = setInterval(() => {
+      loadNotifications();
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [loadNotifications]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -63,21 +70,29 @@ const NotificationScreen = ({onClose, onNotificationPress}) => {
 
   const markAsRead = async notificationId => {
     try {
-      const updated = notifications.map(notif =>
-        notif.id === notificationId ? {...notif, unread: false} : notif,
-      );
-      setNotifications(updated);
-      await AsyncStorage.setItem('app_notifications', JSON.stringify(updated));
+      const updated = await markNotificationRead(notificationId);
+      const cleanNotifications = removeDuplicateNotifications(updated);
+
+      setNotifications(cleanNotifications);
+
+      if (onRefreshCount) {
+        onRefreshCount();
+      }
     } catch (error) {
-      console.error('Error marking as read:', error);
+      console.error('Error marking notification as read:', error);
     }
   };
 
   const markAllAsRead = async () => {
     try {
-      const updated = notifications.map(notif => ({...notif, unread: false}));
-      setNotifications(updated);
-      await AsyncStorage.setItem('app_notifications', JSON.stringify(updated));
+      const updated = await markAllNotificationsRead();
+      const cleanNotifications = removeDuplicateNotifications(updated);
+
+      setNotifications(cleanNotifications);
+
+      if (onRefreshCount) {
+        onRefreshCount();
+      }
     } catch (error) {
       console.error('Error marking all as read:', error);
     }
@@ -85,29 +100,41 @@ const NotificationScreen = ({onClose, onNotificationPress}) => {
 
   const handleNotificationPress = async item => {
     await markAsRead(item.id);
+
     if (onNotificationPress) {
       onNotificationPress(item);
     }
-    onClose();
   };
 
   const getTimeAgo = timestamp => {
+    if (!timestamp) {
+      return 'Just now';
+    }
+
     const now = new Date();
     const notifTime = new Date(timestamp);
     const diffSeconds = Math.floor((now - notifTime) / 1000);
 
+    if (Number.isNaN(diffSeconds)) {
+      return 'Just now';
+    }
+
     if (diffSeconds < 60) {
       return 'Just now';
     }
+
     if (diffSeconds < 3600) {
       return `${Math.floor(diffSeconds / 60)} min ago`;
     }
+
     if (diffSeconds < 86400) {
       return `${Math.floor(diffSeconds / 3600)} hours ago`;
     }
+
     if (diffSeconds < 604800) {
       return `${Math.floor(diffSeconds / 86400)} days ago`;
     }
+
     return notifTime.toLocaleDateString();
   };
 
@@ -149,22 +176,30 @@ const NotificationScreen = ({onClose, onNotificationPress}) => {
         ]}>
         <Text style={styles.icon}>{getIcon(item.type)}</Text>
       </View>
+
       <View style={styles.contentContainer}>
         <View style={styles.headerRow}>
-          <Text style={[styles.title, !item.unread && styles.readText]}>
-            {item.title}
+          <Text
+            style={[styles.title, !item.unread && styles.readText]}
+            numberOfLines={2}>
+            {item.title || 'Notification'}
           </Text>
+
           {item.unread && <View style={styles.unreadDot} />}
         </View>
-        <Text style={[styles.message, !item.unread && styles.readText]}>
-          {item.message}
+
+        <Text
+          style={[styles.message, !item.unread && styles.readText]}
+          numberOfLines={3}>
+          {item.message || item.body || 'No message'}
         </Text>
+
         <Text style={styles.timestamp}>{getTimeAgo(item.timestamp)}</Text>
       </View>
     </TouchableOpacity>
   );
 
-  const unreadCount = notifications.filter(n => n.unread).length;
+  const unreadCount = notifications.filter(item => item.unread).length;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -174,21 +209,30 @@ const NotificationScreen = ({onClose, onNotificationPress}) => {
         <TouchableOpacity onPress={onClose} style={styles.closeButton}>
           <Text style={styles.closeIcon}>←</Text>
         </TouchableOpacity>
+
         <Text style={styles.headerTitle}>Notifications</Text>
-        {unreadCount > 0 && (
+
+        {unreadCount > 0 ? (
           <TouchableOpacity
             onPress={markAllAsRead}
             style={styles.markAllButton}>
             <Text style={styles.markAllText}>Mark all read</Text>
           </TouchableOpacity>
+        ) : (
+          <View style={styles.headerRightPlaceholder} />
         )}
       </View>
 
       <FlatList
         data={notifications}
         renderItem={renderNotification}
-        keyExtractor={item => item.id}
-        contentContainerStyle={styles.listContainer}
+        keyExtractor={(item, index) =>
+          `${item?.id || 'notification'}-${item?.timestamp || index}-${index}`
+        }
+        contentContainerStyle={[
+          styles.listContainer,
+          notifications.length === 0 && styles.emptyListContainer,
+        ]}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
@@ -228,6 +272,7 @@ const styles = StyleSheet.create({
   closeButton: {
     padding: 8,
     marginLeft: -8,
+    width: 90,
   },
   closeIcon: {
     fontSize: 28,
@@ -238,19 +283,27 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#f1f5f9',
   },
+  headerRightPlaceholder: {
+    width: 90,
+  },
   markAllButton: {
     paddingVertical: 6,
     paddingHorizontal: 12,
     backgroundColor: '#1e293b',
     borderRadius: 8,
+    width: 90,
+    alignItems: 'center',
   },
   markAllText: {
     color: '#10b981',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '500',
   },
   listContainer: {
     padding: 16,
+  },
+  emptyListContainer: {
+    flexGrow: 1,
   },
   notificationItem: {
     flexDirection: 'row',
@@ -311,9 +364,10 @@ const styles = StyleSheet.create({
     color: '#64748b',
   },
   emptyContainer: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingTop: 100,
+    paddingBottom: 80,
   },
   emptyIcon: {
     fontSize: 64,

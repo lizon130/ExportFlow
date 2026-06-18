@@ -4,9 +4,11 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  Alert,
   Modal,
+  ActivityIndicator,
 } from 'react-native';
+
+const API_BASE_URL = 'http://192.168.9.45:7000';
 
 const Header = ({
   onMenuPress,
@@ -14,13 +16,51 @@ const Header = ({
   unreadCount,
   avatarText = 'AM',
   onLogout,
+  userData,
 }) => {
   const [showLogoutModal, setShowLogoutModal] = React.useState(false);
+  const [logoutLoading, setLogoutLoading] = React.useState(false);
 
-  const handleLogout = () => {
-    setShowLogoutModal(false);
-    if (onLogout) {
-      onLogout();
+  const getUserId = () => {
+    return userData?.userId || userData?.id || userData?.UserId || 0;
+  };
+
+  const handleLogout = async () => {
+    try {
+      setLogoutLoading(true);
+
+      const userId = getUserId();
+
+      const response = await fetch(
+        `${API_BASE_URL}/api/Auth/logout?userId=${userId}`,
+        {
+          method: 'POST',
+          headers: {
+            accept: '*/*',
+          },
+        },
+      );
+
+      const result = await response.text();
+
+      console.log('Logout API Status:', response.status);
+      console.log('Logout API Response:', result);
+
+      setShowLogoutModal(false);
+
+      if (onLogout) {
+        onLogout();
+      }
+    } catch (error) {
+      console.log('Logout Error:', error);
+
+      setShowLogoutModal(false);
+
+      if (onLogout) {
+        onLogout();
+      }
+    } finally {
+      setLogoutLoading(false);
     }
   };
 
@@ -30,17 +70,22 @@ const Header = ({
         <TouchableOpacity style={styles.menuButton} onPress={onMenuPress}>
           <Text style={styles.menuIcon}>☰</Text>
         </TouchableOpacity>
+
         <View style={styles.headerActions}>
           <TouchableOpacity
             style={styles.notifIcon}
             onPress={onNotificationPress}>
             <Text style={styles.notifIconText}>🔔</Text>
+
             {unreadCount > 0 && (
               <View style={styles.notifBadge}>
-                <Text style={styles.notifBadgeText}>{unreadCount}</Text>
+                <Text style={styles.notifBadgeText}>
+                  {unreadCount > 99 ? '99+' : unreadCount}
+                </Text>
               </View>
             )}
           </TouchableOpacity>
+
           <TouchableOpacity
             style={styles.avatar}
             onPress={() => setShowLogoutModal(true)}>
@@ -49,7 +94,6 @@ const Header = ({
         </View>
       </View>
 
-      {/* Logout Confirmation Modal */}
       <Modal
         visible={showLogoutModal}
         transparent
@@ -58,22 +102,35 @@ const Header = ({
         <TouchableOpacity
           style={styles.modalOverlay}
           activeOpacity={1}
-          onPress={() => setShowLogoutModal(false)}>
+          onPress={() => {
+            if (!logoutLoading) {
+              setShowLogoutModal(false);
+            }
+          }}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Logout</Text>
+
             <Text style={styles.modalMessage}>
               Are you sure you want to logout?
             </Text>
+
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={[styles.modalButton, styles.cancelButton]}
+                disabled={logoutLoading}
                 onPress={() => setShowLogoutModal(false)}>
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
+
               <TouchableOpacity
                 style={[styles.modalButton, styles.logoutButton]}
+                disabled={logoutLoading}
                 onPress={handleLogout}>
-                <Text style={styles.logoutButtonText}>Logout</Text>
+                {logoutLoading ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <Text style={styles.logoutButtonText}>Logout</Text>
+                )}
               </TouchableOpacity>
             </View>
           </View>
@@ -118,10 +175,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#10b981',
     justifyContent: 'center',
     alignItems: 'center',
-    cursor: 'pointer',
   },
   avatarText: {color: 'white', fontWeight: '600', fontSize: 14},
-  // Modal Styles
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.7)',

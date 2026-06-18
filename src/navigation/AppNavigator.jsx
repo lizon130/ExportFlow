@@ -1,4 +1,6 @@
-// AppNavigator.js - With Back Navigation and Swipe Gestures (No Animation)
+// File: src/navigation/AppNavigator.js
+// AppNavigator.js - With Back Navigation, Swipe Gestures, FCM Notification Save + Badge Count
+
 import React, {useState, useEffect, useRef, useCallback} from 'react';
 import {
   View,
@@ -8,25 +10,27 @@ import {
   PanResponder,
   Dimensions,
 } from 'react-native';
+
 import Header from '../components/layout/Header';
 import Sidebar from '../components/layout/Sidebar';
 import BottomTabBar from '../components/layout/BottomTabBar';
 import SkeletonLoader from '../components/skeleton/SkeletonLoader';
 
-// Import all screens
 import DashboardScreen from '../components/DashboardScreen';
 import ExportDocsScreen from '../screens/ExportDocsScreen';
 import BLScreen from '../screens/BLScreen';
 import ShippingScreen from '../screens/ShippingScreen';
 import BankSubmitScreen from '../screens/BankSubmitScreen';
 import RealizationScreen from '../screens/RealizationScreen';
-import NotificationScreen from '../screens/NotificationScreen'; // Add this
+import NotificationScreen from '../screens/NotificationScreen';
 
-import {registerFCMToken} from '../services/NotificationService';
 import messaging from '@react-native-firebase/messaging';
+import {registerFCMToken} from '../services/NotificationService';
 
-// Import notifications data
-import {notifications} from '../data/mockData';
+import {
+  getNotifications,
+  saveNotification,
+} from '../services/notificationStorage';
 
 const {width: SCREEN_WIDTH} = Dimensions.get('window');
 
@@ -34,109 +38,150 @@ const AppNavigator = ({onLogout, userData}) => {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [showSidebar, setShowSidebar] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
-  const [showNotificationScreen, setShowNotificationScreen] = useState(false); // Add this
+  const [showNotificationScreen, setShowNotificationScreen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [navigationHistory, setNavigationHistory] = useState(['dashboard']);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   const isNavigating = useRef(false);
 
+  const refreshUnreadCount = useCallback(async () => {
+    try {
+      const savedNotifications = await getNotifications();
+      const count = savedNotifications.filter(item => item.unread).length;
+      setUnreadCount(count);
+    } catch (error) {
+      console.log('Refresh unread count error:', error);
+    }
+  }, []);
+
   useEffect(() => {
-  if (userData) {
-    registerFCMToken(userData);
-  }
-}, [userData]);
+    if (userData) {
+      registerFCMToken(userData);
+    }
 
-useEffect(() => {
-  const unsubscribe = messaging().onMessage(async remoteMessage => {
-    console.log('FCM FOREGROUND RECEIVED:', JSON.stringify(remoteMessage));
+    refreshUnreadCount();
+  }, [userData, refreshUnreadCount]);
 
-    Alert.alert(
-      remoteMessage?.notification?.title ||
+  useEffect(() => {
+    const unsubscribe = messaging().onMessage(async remoteMessage => {
+      console.log('FCM FOREGROUND RECEIVED:', JSON.stringify(remoteMessage));
+
+      const title =
+        remoteMessage?.notification?.title ||
         remoteMessage?.data?.title ||
-        'Notification',
-      remoteMessage?.notification?.body ||
+        'Notification';
+
+      const body =
+        remoteMessage?.notification?.body ||
         remoteMessage?.data?.body ||
-        'No message',
+        remoteMessage?.data?.message ||
+        'No message';
+
+      await saveNotification({
+        id: remoteMessage?.messageId || `${Date.now()}`,
+        title: title,
+        message: body,
+        type: remoteMessage?.data?.type || 'info',
+        timestamp: new Date().toISOString(),
+      });
+
+      await refreshUnreadCount();
+
+      Alert.alert(title, body);
+    });
+
+    return unsubscribe;
+  }, [refreshUnreadCount]);
+
+  useEffect(() => {
+    const unsubscribeOpened = messaging().onNotificationOpenedApp(
+      async remoteMessage => {
+        console.log(
+          'FCM OPENED FROM BACKGROUND:',
+          JSON.stringify(remoteMessage),
+        );
+
+        if (!remoteMessage) {
+          return;
+        }
+
+        const title =
+          remoteMessage?.notification?.title ||
+          remoteMessage?.data?.title ||
+          'Notification';
+
+        const body =
+          remoteMessage?.notification?.body ||
+          remoteMessage?.data?.body ||
+          remoteMessage?.data?.message ||
+          'No message';
+
+        await saveNotification({
+          id: remoteMessage?.messageId || `${Date.now()}`,
+          title: title,
+          message: body,
+          type: remoteMessage?.data?.type || 'info',
+          timestamp: new Date().toISOString(),
+        });
+
+        await refreshUnreadCount();
+        setShowNotificationScreen(true);
+      },
     );
-  });
 
-  return unsubscribe;
-}, []);
+    messaging()
+      .getInitialNotification()
+      .then(async remoteMessage => {
+        console.log('FCM INITIAL NOTIFICATION:', JSON.stringify(remoteMessage));
 
-  const unreadCount = notifications.filter(n => n.unread).length;
+        if (!remoteMessage) {
+          return;
+        }
 
-  // Handle notification open
-  const handleOpenNotifications = () => {
-    setShowNotifications(false); // Close modal if open
-    setShowNotificationScreen(true); // Open full screen notification page
+        const title =
+          remoteMessage?.notification?.title ||
+          remoteMessage?.data?.title ||
+          'Notification';
+
+        const body =
+          remoteMessage?.notification?.body ||
+          remoteMessage?.data?.body ||
+          remoteMessage?.data?.message ||
+          'No message';
+
+        await saveNotification({
+          id: remoteMessage?.messageId || `${Date.now()}`,
+          title: title,
+          message: body,
+          type: remoteMessage?.data?.type || 'info',
+          timestamp: new Date().toISOString(),
+        });
+
+        await refreshUnreadCount();
+        setShowNotificationScreen(true);
+      });
+
+    return unsubscribeOpened;
+  }, [refreshUnreadCount]);
+
+  const handleOpenNotifications = async () => {
+    setShowNotifications(false);
+    setShowNotificationScreen(true);
+    await refreshUnreadCount();
   };
 
-  // Handle close notification screen
-  const handleCloseNotifications = () => {
+  const handleCloseNotifications = async () => {
     setShowNotificationScreen(false);
+    await refreshUnreadCount();
   };
 
-  // Handle notification press
-  const handleNotificationPress = notification => {
+  const handleNotificationPress = async notification => {
     console.log('Notification pressed:', notification);
-    // Future: Navigate to specific screen based on notification type
     setShowNotificationScreen(false);
+    await refreshUnreadCount();
   };
 
-  // PanResponder for swipe gestures - No animation, just navigation
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: (_, gestureState) => {
-        // Don't allow swipe when notification screen is open
-        if (showNotificationScreen) {
-          return false;
-        }
-
-        // Only allow swipe from left edge when we can go back
-        const canGoBack =
-          navigationHistory.length > 1 || activeTab !== 'dashboard';
-        const isFromLeftEdge = gestureState.moveX < 30;
-        return canGoBack && isFromLeftEdge && !isNavigating.current;
-      },
-      onMoveShouldSetPanResponder: (_, gestureState) => {
-        // Only trigger on horizontal swipe (not vertical)
-        return Math.abs(gestureState.dx) > 30 && Math.abs(gestureState.dy) < 30;
-      },
-      onPanResponderRelease: (_, gestureState) => {
-        // Navigate back if swiped more than 50px to the right
-        if (gestureState.dx > 50) {
-          goBack();
-        }
-      },
-    }),
-  ).current;
-
-  // Go back to previous tab
-  const goBack = useCallback(() => {
-    if (isNavigating.current) {
-      return;
-    }
-
-    if (navigationHistory.length > 1) {
-      isNavigating.current = true;
-      const newHistory = [...navigationHistory];
-      newHistory.pop();
-      const previousTab = newHistory[newHistory.length - 1];
-
-      setLoading(true);
-      setActiveTab(previousTab);
-      setNavigationHistory(newHistory);
-
-      setTimeout(() => {
-        setLoading(false);
-        isNavigating.current = false;
-      }, 300);
-    } else if (activeTab !== 'dashboard') {
-      goBackToDashboard();
-    }
-  }, [navigationHistory, activeTab, goBackToDashboard]);
-
-  // Go back to dashboard
   const goBackToDashboard = useCallback(() => {
     if (isNavigating.current) {
       return;
@@ -153,34 +198,94 @@ useEffect(() => {
     }, 300);
   }, []);
 
-  // Handle hardware back button (Android)
+  const goBack = useCallback(() => {
+    if (isNavigating.current) {
+      return;
+    }
+
+    if (showNotificationScreen) {
+      setShowNotificationScreen(false);
+      refreshUnreadCount();
+      return;
+    }
+
+    if (navigationHistory.length > 1) {
+      isNavigating.current = true;
+
+      const newHistory = [...navigationHistory];
+      newHistory.pop();
+
+      const previousTab = newHistory[newHistory.length - 1];
+
+      setLoading(true);
+      setActiveTab(previousTab);
+      setNavigationHistory(newHistory);
+
+      setTimeout(() => {
+        setLoading(false);
+        isNavigating.current = false;
+      }, 300);
+    } else if (activeTab !== 'dashboard') {
+      goBackToDashboard();
+    }
+  }, [
+    activeTab,
+    navigationHistory,
+    goBackToDashboard,
+    showNotificationScreen,
+    refreshUnreadCount,
+  ]);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: (_, gestureState) => {
+        if (showNotificationScreen) {
+          return false;
+        }
+
+        const canGoBack =
+          navigationHistory.length > 1 || activeTab !== 'dashboard';
+
+        const isFromLeftEdge = gestureState.moveX < 30;
+
+        return canGoBack && isFromLeftEdge && !isNavigating.current;
+      },
+
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        return Math.abs(gestureState.dx) > 30 && Math.abs(gestureState.dy) < 30;
+      },
+
+      onPanResponderRelease: (_, gestureState) => {
+        if (gestureState.dx > 50) {
+          goBack();
+        }
+      },
+    }),
+  ).current;
+
   useEffect(() => {
     const backAction = () => {
-      // Close sidebar if open
       if (showSidebar) {
         setShowSidebar(false);
         return true;
       }
 
-      // Close notification screen if open
       if (showNotificationScreen) {
         setShowNotificationScreen(false);
+        refreshUnreadCount();
         return true;
-      } 
+      }
 
-      // Close notifications modal if open
       if (showNotifications) {
         setShowNotifications(false);
         return true;
       }
 
-      // Go back to previous tab if exists
       if (navigationHistory.length > 1) {
         goBack();
         return true;
       }
 
-      // Exit app if on main dashboard
       if (activeTab === 'dashboard') {
         Alert.alert(
           'Exit App',
@@ -191,10 +296,10 @@ useEffect(() => {
           ],
           {cancelable: true},
         );
+
         return true;
       }
 
-      // Go back to dashboard
       goBackToDashboard();
       return true;
     };
@@ -203,6 +308,7 @@ useEffect(() => {
       'hardwareBackPress',
       backAction,
     );
+
     return () => backHandler.remove();
   }, [
     showSidebar,
@@ -212,17 +318,15 @@ useEffect(() => {
     activeTab,
     goBack,
     goBackToDashboard,
+    refreshUnreadCount,
   ]);
 
-  // Handle navigation with history
   const handleTabChange = tabName => {
     if (tabName === activeTab || isNavigating.current) {
       return;
     }
 
     setLoading(true);
-
-    // Add to navigation history
     setNavigationHistory(prev => [...prev, tabName]);
 
     setTimeout(() => {
@@ -231,7 +335,6 @@ useEffect(() => {
     }, 300);
   };
 
-  // Handle navigation from cards
   const handleCardNavigate = screenName => {
     const tabMap = {
       exportDoc: 'exportDoc',
@@ -242,12 +345,12 @@ useEffect(() => {
     };
 
     const tabName = tabMap[screenName];
+
     if (tabName) {
       handleTabChange(tabName);
     }
   };
 
-  // Handle sidebar navigation
   const handleSidebarSelect = tabName => {
     if (tabName === activeTab) {
       setShowSidebar(false);
@@ -265,17 +368,16 @@ useEffect(() => {
   };
 
   const renderScreen = () => {
-    // Show notification screen first if open
     if (showNotificationScreen) {
       return (
         <NotificationScreen
           onClose={handleCloseNotifications}
           onNotificationPress={handleNotificationPress}
+          onRefreshCount={refreshUnreadCount}
         />
       );
     }
 
-    // Otherwise show regular screens
     switch (activeTab) {
       case 'dashboard':
         return (
@@ -284,24 +386,30 @@ useEffect(() => {
             userData={userData}
           />
         );
+
       case 'exportDoc':
         return (
           <ExportDocsScreen onLoadingChange={setLoading} userData={userData} />
         );
+
       case 'blDates':
         return <BLScreen onLoadingChange={setLoading} userData={userData} />;
+
       case 'shipping':
         return (
           <ShippingScreen onLoadingChange={setLoading} userData={userData} />
         );
+
       case 'bankSubmit':
         return (
           <BankSubmitScreen onLoadingChange={setLoading} userData={userData} />
         );
+
       case 'realization':
         return (
           <RealizationScreen onLoadingChange={setLoading} userData={userData} />
         );
+
       default:
         return (
           <DashboardScreen
@@ -320,10 +428,6 @@ useEffect(() => {
         unreadCount={unreadCount}
         onLogout={onLogout}
         userData={userData}
-        onBackPress={navigationHistory.length > 1 ? goBack : null}
-        showBackButton={
-          navigationHistory.length > 1 || activeTab !== 'dashboard'
-        }
       />
 
       <View style={styles.content}>
@@ -332,7 +436,6 @@ useEffect(() => {
         </View>
       </View>
 
-      {/* Hide bottom tab bar when notification screen is open */}
       {!showNotificationScreen && (
         <BottomTabBar activeTab={activeTab} onTabPress={handleTabChange} />
       )}
