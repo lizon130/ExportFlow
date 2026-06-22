@@ -1,4 +1,8 @@
 // src/components/layout/Sidebar.js
+// Fixed Sidebar.js
+// Fixes: Objects are not valid as a React child
+// Supports roles as strings or objects: {recId, roleName}
+
 import React, {useState, useEffect, useCallback} from 'react';
 import {
   View,
@@ -8,9 +12,10 @@ import {
   StyleSheet,
   ActivityIndicator,
   ScrollView,
-  Platform,
 } from 'react-native';
 import axios from 'axios';
+
+const API_BASE_URL = 'http://192.168.9.45:7000';
 
 const Sidebar = ({visible, onClose, activeTab, onTabSelect, userData}) => {
   const [profile, setProfile] = useState(null);
@@ -26,113 +31,202 @@ const Sidebar = ({visible, onClose, activeTab, onTabSelect, userData}) => {
     {id: 'realization', icon: '💰', label: 'Realization'},
   ];
 
-  // API Base URL - Update this to match your server
-  const API_BASE_URL = 'http://192.168.9.45:7000';
+  const getUserId = useCallback(() => {
+    return (
+      userData?.userId ||
+      userData?.id ||
+      userData?.UserId ||
+      userData?.ID ||
+      profile?.userId ||
+      profile?.recId ||
+      0
+    );
+  }, [userData, profile]);
 
-  // Fetch user profile when sidebar opens
-  useEffect(() => {
-    if (visible && userData?.userId && userData?.accessToken) {
-      console.log(
-        'Sidebar opened - Fetching profile for userId:',
-        userData.userId,
-      );
-      fetchUserProfile();
+  const normalizeRole = role => {
+    if (!role) {
+      return '';
     }
-  }, [visible, userData]);
+
+    if (typeof role === 'string') {
+      return role;
+    }
+
+    return role.roleName || role.name || role.title || '';
+  };
+
+  const normalizeDepartment = department => {
+    if (!department) {
+      return '';
+    }
+
+    if (typeof department === 'string') {
+      return department;
+    }
+
+    return (
+      department.departmentName ||
+      department.departmentCode ||
+      department.name ||
+      department.code ||
+      ''
+    );
+  };
+
+  const normalizeBuyer = buyer => {
+    if (!buyer) {
+      return '';
+    }
+
+    if (typeof buyer === 'string') {
+      return buyer;
+    }
+
+    return buyer.buyerName || buyer.buyerCode || buyer.name || buyer.code || '';
+  };
+
+  const getRoleNames = currentProfile => {
+    if (!Array.isArray(currentProfile?.roles)) {
+      return [];
+    }
+
+    return currentProfile.roles.map(normalizeRole).filter(Boolean);
+  };
+
+  const getDepartmentNames = currentProfile => {
+    if (!Array.isArray(currentProfile?.departments)) {
+      return [];
+    }
+
+    return currentProfile.departments.map(normalizeDepartment).filter(Boolean);
+  };
+
+  const getBuyerNames = currentProfile => {
+    if (!Array.isArray(currentProfile?.buyers)) {
+      return [];
+    }
+
+    return currentProfile.buyers.map(normalizeBuyer).filter(Boolean);
+  };
 
   const fetchUserProfile = useCallback(async () => {
+    const userId =
+      userData?.userId ||
+      userData?.id ||
+      userData?.UserId ||
+      userData?.ID ||
+      0;
+
+    if (!userId) {
+      setError('User ID not found. Please login again.');
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
     try {
-      // Use the actual userId from login (which is 4, not 2)
-      const url = `${API_BASE_URL}/api/User/${userData.userId}/profile`;
+      const url = `${API_BASE_URL}/api/User/${userId}/profile`;
+
       console.log('Fetching profile from:', url);
-      console.log(
-        'Using token:',
-        userData.accessToken?.substring(0, 50) + '...',
-      );
+
+      const headers = {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      };
+
+      if (userData?.accessToken) {
+        headers.Authorization = `Bearer ${userData.accessToken}`;
+      }
 
       const response = await axios({
         method: 'get',
-        url: url,
-        headers: {
-          Authorization: `Bearer ${userData.accessToken}`,
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
+        url,
+        headers,
         timeout: 10000,
       });
 
       console.log('Profile API Response Success:', response.status);
       console.log('Profile data:', response.data);
+
       setProfile(response.data);
-    } catch (error) {
-      console.error('Error fetching profile:', error);
+    } catch (fetchError) {
+      console.error('Error fetching profile:', fetchError);
 
-      if (error.response) {
-        console.error('Response status:', error.response.status);
-        console.error('Response data:', error.response.data);
-
-        if (error.response.status === 401) {
+      if (fetchError.response) {
+        if (fetchError.response.status === 401) {
           setError('Session expired. Please login again.');
-        } else if (error.response.status === 404) {
-          setError(`Profile not found for user ID: ${userData.userId}`);
+        } else if (fetchError.response.status === 404) {
+          setError(`Profile not found for user ID: ${userId}`);
         } else {
-          setError(`Server error: ${error.response.status}`);
+          setError(`Server error: ${fetchError.response.status}`);
         }
-      } else if (error.request) {
-        console.error('No response from server:', error.request);
+      } else if (fetchError.request) {
         setError(
           `Cannot connect to server at ${API_BASE_URL}\n\nPlease check:\n• Server is running\n• Device is on same network\n• No firewall blocking`,
         );
       } else {
-        setError(`Error: ${error.message}`);
+        setError(`Error: ${fetchError.message}`);
       }
     } finally {
       setLoading(false);
     }
-  }, [userData.userId, userData.accessToken]);
+  }, [userData]);
 
-  // Get user initial for avatar
+  useEffect(() => {
+    if (visible) {
+      fetchUserProfile();
+    }
+  }, [visible, fetchUserProfile]);
+
   const getUserInitial = () => {
-    if (profile?.userName) {
-      return profile.userName.charAt(0).toUpperCase();
+    const name =
+      profile?.userName ||
+      profile?.name ||
+      userData?.userName ||
+      userData?.username ||
+      '';
+
+    if (name) {
+      return String(name).charAt(0).toUpperCase();
     }
-    if (userData?.userId) {
-      return userData.userId.charAt(0);
+
+    const userId = getUserId();
+
+    if (userId) {
+      return String(userId).charAt(0);
     }
+
     return '👤';
   };
 
-  // Get display name
   const getDisplayName = () => {
-    if (profile?.userName) {
-      return profile.userName;
-    }
-    if (userData?.userId) {
-      return `User ${userData.userId}`;
-    }
-    return 'User';
+    return (
+      profile?.userName ||
+      profile?.name ||
+      userData?.userName ||
+      userData?.username ||
+      `User ${getUserId() || ''}`
+    );
   };
 
-  // Get email
   const getEmail = () => {
-    if (profile?.email) {
-      return profile.email;
-    }
-    return 'user@example.com';
+    return profile?.email || userData?.email || 'user@example.com';
   };
 
-  // Check if user is SuperAdmin or Admin
   const shouldHideDepartmentsAndBuyers = () => {
-    if (!profile?.roles || profile.roles.length === 0) {
-      return false;
-    }
-    const restrictedRoles = ['SuperAdmin', 'Admin'];
-    return profile.roles.some(role => restrictedRoles.includes(role));
+    const roleNames = getRoleNames(profile).map(role =>
+      String(role).toLowerCase().replace(/[-_\s]/g, ''),
+    );
+
+    const restrictedRoles = ['superadmin', 'admin'];
+
+    return roleNames.some(role => restrictedRoles.includes(role));
   };
 
+  const roleNames = getRoleNames(profile);
+  const departmentNames = getDepartmentNames(profile);
+  const buyerNames = getBuyerNames(profile);
   const hideDepartmentsAndBuyers = shouldHideDepartmentsAndBuyers();
 
   return (
@@ -149,16 +243,17 @@ const Sidebar = ({visible, onClose, activeTab, onTabSelect, userData}) => {
               </View>
               <Text style={styles.sidebarLogoText}>ExportFlow</Text>
             </View>
+
             <TouchableOpacity onPress={onClose} style={styles.closeButton}>
               <Text style={styles.closeIcon}>✕</Text>
             </TouchableOpacity>
           </View>
 
-          {/* User Profile Section */}
           <View style={styles.userInfo}>
             <View style={styles.userAvatar}>
               <Text style={styles.userAvatarText}>{getUserInitial()}</Text>
             </View>
+
             <View style={styles.userDetails}>
               {loading ? (
                 <View style={styles.profileLoadingContainer}>
@@ -170,6 +265,7 @@ const Sidebar = ({visible, onClose, activeTab, onTabSelect, userData}) => {
               ) : error ? (
                 <>
                   <Text style={styles.errorText}>{error}</Text>
+
                   <TouchableOpacity
                     style={styles.retryButton}
                     onPress={fetchUserProfile}>
@@ -181,42 +277,38 @@ const Sidebar = ({visible, onClose, activeTab, onTabSelect, userData}) => {
                   <Text style={styles.userName}>
                     Welcome {getDisplayName()}!
                   </Text>
+
                   <Text style={styles.userEmail}>{getEmail()}</Text>
 
-                  {/* Roles */}
-                  {profile.roles && profile.roles.length > 0 && (
+                  {roleNames.length > 0 && (
                     <View style={styles.rolesContainer}>
-                      {profile.roles.map((role, index) => (
-                        <View key={index} style={styles.roleBadge}>
-                          <Text style={styles.roleText}>{role}</Text>
+                      {roleNames.map((roleName, index) => (
+                        <View
+                          key={`${roleName}-${index}`}
+                          style={styles.roleBadge}>
+                          <Text style={styles.roleText}>{roleName}</Text>
                         </View>
                       ))}
                     </View>
                   )}
 
-                  {/* Departments - Hidden for SuperAdmin and Admin */}
-                  {!hideDepartmentsAndBuyers &&
-                    profile.departments &&
-                    profile.departments.length > 0 && (
-                      <View style={styles.infoSection}>
-                        <Text style={styles.infoLabel}>Departments:</Text>
-                        <Text style={styles.infoValue} numberOfLines={2}>
-                          {profile.departments.join(', ')}
-                        </Text>
-                      </View>
-                    )}
+                  {!hideDepartmentsAndBuyers && departmentNames.length > 0 && (
+                    <View style={styles.infoSection}>
+                      <Text style={styles.infoLabel}>Departments:</Text>
+                      <Text style={styles.infoValue} numberOfLines={2}>
+                        {departmentNames.join(', ')}
+                      </Text>
+                    </View>
+                  )}
 
-                  {/* Buyers - Hidden for SuperAdmin and Admin */}
-                  {!hideDepartmentsAndBuyers &&
-                    profile.buyers &&
-                    profile.buyers.length > 0 && (
-                      <View style={styles.infoSection}>
-                        <Text style={styles.infoLabel}>Buyers:</Text>
-                        <Text style={styles.infoValue} numberOfLines={2}>
-                          {profile.buyers.join(', ')}
-                        </Text>
-                      </View>
-                    )}
+                  {!hideDepartmentsAndBuyers && buyerNames.length > 0 && (
+                    <View style={styles.infoSection}>
+                      <Text style={styles.infoLabel}>Buyers:</Text>
+                      <Text style={styles.infoValue} numberOfLines={2}>
+                        {buyerNames.join(', ')}
+                      </Text>
+                    </View>
+                  )}
                 </>
               ) : (
                 <Text style={styles.noDataText}>No profile data available</Text>
@@ -239,6 +331,7 @@ const Sidebar = ({visible, onClose, activeTab, onTabSelect, userData}) => {
                   onClose();
                 }}>
                 <Text style={styles.navIcon}>{item.icon}</Text>
+
                 <Text
                   style={[
                     styles.navText,
@@ -246,6 +339,7 @@ const Sidebar = ({visible, onClose, activeTab, onTabSelect, userData}) => {
                   ]}>
                   {item.label}
                 </Text>
+
                 {activeTab === item.id && (
                   <View style={styles.activeIndicator} />
                 )}
@@ -258,6 +352,7 @@ const Sidebar = ({visible, onClose, activeTab, onTabSelect, userData}) => {
               <Text style={styles.footerIcon}>⚙️</Text>
               <Text style={styles.footerText}>Settings</Text>
             </TouchableOpacity>
+
             <TouchableOpacity style={styles.footerItem}>
               <Text style={styles.footerIcon}>❓</Text>
               <Text style={styles.footerText}>Help</Text>

@@ -63,36 +63,36 @@ const AppNavigator = ({onLogout, userData}) => {
     refreshUnreadCount();
   }, [userData, refreshUnreadCount]);
 
-  useEffect(() => {
-    const unsubscribe = messaging().onMessage(async remoteMessage => {
-      console.log('FCM FOREGROUND RECEIVED:', JSON.stringify(remoteMessage));
+ useEffect(() => {
+  const unsubscribe = messaging().onMessage(async remoteMessage => {
+    console.log('FCM FOREGROUND RECEIVED:', JSON.stringify(remoteMessage));
 
-      const title =
-        remoteMessage?.notification?.title ||
-        remoteMessage?.data?.title ||
-        'Notification';
+    const title =
+      remoteMessage?.notification?.title ||
+      remoteMessage?.data?.title ||
+      'Notification';
 
-      const body =
-        remoteMessage?.notification?.body ||
-        remoteMessage?.data?.body ||
-        remoteMessage?.data?.message ||
-        'No message';
+    const body =
+      remoteMessage?.notification?.body ||
+      remoteMessage?.data?.body ||
+      remoteMessage?.data?.message ||
+      'No message';
 
-      await saveNotification({
-        id: remoteMessage?.messageId || `${Date.now()}`,
-        title: title,
-        message: body,
-        type: remoteMessage?.data?.type || 'info',
-        timestamp: new Date().toISOString(),
-      });
-
-      await refreshUnreadCount();
-
-      Alert.alert(title, body);
+    await saveNotification({
+      id: remoteMessage?.messageId,
+      title,
+      message: body,
+      type: remoteMessage?.data?.type || 'info',
+      timestamp: new Date().toISOString(),
     });
 
-    return unsubscribe;
-  }, [refreshUnreadCount]);
+    await refreshUnreadCount();
+
+    // NO ALERT HERE
+  });
+
+  return unsubscribe;
+}, [refreshUnreadCount]);
 
   useEffect(() => {
     const unsubscribeOpened = messaging().onNotificationOpenedApp(
@@ -374,6 +374,7 @@ const AppNavigator = ({onLogout, userData}) => {
           onClose={handleCloseNotifications}
           onNotificationPress={handleNotificationPress}
           onRefreshCount={refreshUnreadCount}
+          userData={userData}
         />
       );
     }

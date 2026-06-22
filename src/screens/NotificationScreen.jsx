@@ -1,3 +1,8 @@
+// File: src/screens/NotificationScreen.js
+// Fixed: notification click opens modal + feedback box
+// Important: this file does NOT call parent onNotificationPress on item click,
+// because your AppNavigator was closing the notification screen.
+
 import React, {useState, useEffect, useCallback} from 'react';
 import {
   View,
@@ -8,6 +13,9 @@ import {
   SafeAreaView,
   StatusBar,
   RefreshControl,
+  Modal,
+  TextInput,
+  ActivityIndicator,
 } from 'react-native';
 
 import {
@@ -16,9 +24,22 @@ import {
   markAllNotificationsRead,
 } from '../services/notificationStorage';
 
-const NotificationScreen = ({onClose, onNotificationPress, onRefreshCount}) => {
+const FEEDBACK_API_URL =
+  'http://192.168.9.45:7000/api/Notification/save-notification-feedback';
+
+// Keep false if backend feedback API is not ready yet.
+// If backend API is ready, change false to true.
+const SEND_FEEDBACK_TO_API = false;
+
+const NotificationScreen = ({onClose, onRefreshCount}) => {
   const [notifications, setNotifications] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
+
+  const [selectedNotification, setSelectedNotification] = useState(null);
+  const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [feedbackText, setFeedbackText] = useState('');
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
+  const [feedbackMessage, setFeedbackMessage] = useState('');
 
   const removeDuplicateNotifications = items => {
     const seen = new Set();
@@ -101,8 +122,77 @@ const NotificationScreen = ({onClose, onNotificationPress, onRefreshCount}) => {
   const handleNotificationPress = async item => {
     await markAsRead(item.id);
 
-    if (onNotificationPress) {
-      onNotificationPress(item);
+    setSelectedNotification(item);
+    setFeedbackText('');
+    setFeedbackMessage('');
+    setShowDetailsModal(true);
+  };
+
+  const closeDetailsModal = () => {
+    setShowDetailsModal(false);
+    setSelectedNotification(null);
+    setFeedbackText('');
+    setFeedbackMessage('');
+  };
+
+  const submitFeedback = async () => {
+    if (!selectedNotification) {
+      return;
+    }
+
+    if (!feedbackText.trim()) {
+      setFeedbackMessage('Please write your feedback first.');
+      return;
+    }
+
+    try {
+      setFeedbackLoading(true);
+      setFeedbackMessage('');
+
+      const payload = {
+        notificationId: selectedNotification.id,
+        title: selectedNotification.title || 'Notification',
+        message:
+          selectedNotification.message ||
+          selectedNotification.body ||
+          'No message',
+        feedback: feedbackText.trim(),
+        createdAt: new Date().toISOString(),
+      };
+
+      console.log('Notification feedback payload:', payload);
+
+      if (SEND_FEEDBACK_TO_API) {
+        const response = await fetch(FEEDBACK_API_URL, {
+          method: 'POST',
+          headers: {
+            accept: '*/*',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+        });
+
+        const result = await response.text();
+
+        console.log('Feedback API Status:', response.status);
+        console.log('Feedback API Response:', result);
+
+        if (!response.ok) {
+          throw new Error(result || 'Feedback submit failed');
+        }
+      }
+
+      setFeedbackMessage('Feedback submitted successfully.');
+      setFeedbackText('');
+
+      setTimeout(() => {
+        closeDetailsModal();
+      }, 800);
+    } catch (error) {
+      console.error('Feedback submit error:', error);
+      setFeedbackMessage('Feedback submit failed. Please try again.');
+    } finally {
+      setFeedbackLoading(false);
     }
   };
 
@@ -250,6 +340,95 @@ const NotificationScreen = ({onClose, onNotificationPress, onRefreshCount}) => {
           </View>
         }
       />
+
+      <Modal
+        visible={showDetailsModal}
+        transparent
+        animationType="fade"
+        onRequestClose={closeDetailsModal}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalTopRow}>
+              <Text style={styles.modalTitle}>Notification Details</Text>
+
+              <TouchableOpacity
+                onPress={closeDetailsModal}
+                style={styles.modalCloseButton}>
+                <Text style={styles.modalCloseText}>×</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.modalNotificationBox}>
+              <View
+                style={[
+                  styles.modalIconContainer,
+                  {
+                    backgroundColor: getIconBackgroundColor(
+                      selectedNotification?.type,
+                    ),
+                  },
+                ]}>
+                <Text style={styles.modalIcon}>
+                  {getIcon(selectedNotification?.type)}
+                </Text>
+              </View>
+
+              <View style={styles.modalNotificationTextBox}>
+                <Text style={styles.modalNotificationTitle}>
+                  {selectedNotification?.title || 'Notification'}
+                </Text>
+
+                <Text style={styles.modalNotificationMessage}>
+                  {selectedNotification?.message ||
+                    selectedNotification?.body ||
+                    'No message'}
+                </Text>
+
+                <Text style={styles.modalTimestamp}>
+                  {getTimeAgo(selectedNotification?.timestamp)}
+                </Text>
+              </View>
+            </View>
+
+            <Text style={styles.feedbackLabel}>Feedback</Text>
+
+            <TextInput
+              style={styles.feedbackInput}
+              placeholder="Write your feedback for this notification..."
+              placeholderTextColor="#64748b"
+              value={feedbackText}
+              onChangeText={setFeedbackText}
+              multiline
+              numberOfLines={4}
+              textAlignVertical="top"
+            />
+
+            {feedbackMessage ? (
+              <Text style={styles.feedbackMessage}>{feedbackMessage}</Text>
+            ) : null}
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={closeDetailsModal}
+                disabled={feedbackLoading}>
+                <Text style={styles.cancelButtonText}>Close</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.modalButton, styles.submitButton]}
+                onPress={submitFeedback}
+                disabled={feedbackLoading}>
+                {feedbackLoading ? (
+                  <ActivityIndicator color="#ffffff" size="small" />
+                ) : (
+                  <Text style={styles.submitButtonText}>Submit</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -382,6 +561,135 @@ const styles = StyleSheet.create({
   emptySubtext: {
     fontSize: 14,
     color: '#64748b',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  modalContent: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: '#12141c',
+    borderRadius: 20,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: '#1e293b',
+  },
+  modalTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#f1f5f9',
+  },
+  modalCloseButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#1e293b',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalCloseText: {
+    color: '#f1f5f9',
+    fontSize: 24,
+    lineHeight: 26,
+  },
+  modalNotificationBox: {
+    flexDirection: 'row',
+    backgroundColor: '#0f1119',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#1e293b',
+    marginBottom: 16,
+  },
+  modalIconContainer: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  modalIcon: {
+    fontSize: 22,
+  },
+  modalNotificationTextBox: {
+    flex: 1,
+  },
+  modalNotificationTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#f1f5f9',
+    marginBottom: 6,
+  },
+  modalNotificationMessage: {
+    fontSize: 14,
+    color: '#cbd5e1',
+    lineHeight: 20,
+    marginBottom: 8,
+  },
+  modalTimestamp: {
+    fontSize: 11,
+    color: '#64748b',
+  },
+  feedbackLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#94a3b8',
+    marginBottom: 8,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  feedbackInput: {
+    minHeight: 100,
+    backgroundColor: '#0f1119',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#1e293b',
+    color: '#f1f5f9',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  feedbackMessage: {
+    color: '#10b981',
+    fontSize: 12,
+    marginTop: 8,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 16,
+  },
+  modalButton: {
+    flex: 1,
+    paddingVertical: 11,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  cancelButton: {
+    backgroundColor: '#1e293b',
+  },
+  cancelButtonText: {
+    color: '#cbd5e1',
+    fontWeight: '600',
+  },
+  submitButton: {
+    backgroundColor: '#10b981',
+  },
+  submitButtonText: {
+    color: '#ffffff',
+    fontWeight: '700',
   },
 });
 
