@@ -23,6 +23,7 @@ const DashboardScreen = ({onNavigate, userData}) => {
     exportPendingCount: 0,
     exportCompletedCount: 0,
     completedExportCount: 0,
+    shipmentValue: 0,
     // B/L Date
     totalBLDateCount: 0,
     totalPendingBLDate: 0,
@@ -176,6 +177,8 @@ const DashboardScreen = ({onNavigate, userData}) => {
           ? completedData[0].completedExportCount || 0
           : 0;
 
+      const shipmentValue = sumTotalValue(completedData);
+
       const pendingCount = Array.isArray(pendingData)
         ? pendingData.reduce(
             (sum, item) => sum + (item?.pendingExportCount || 0),
@@ -191,6 +194,7 @@ const DashboardScreen = ({onNavigate, userData}) => {
           exportPendingCount: pendingCount,
           totalExportCount: completedCount + pendingCount,
           completedExportCount: completedCount,
+          shipmentValue,
         }));
       }
 
@@ -198,6 +202,7 @@ const DashboardScreen = ({onNavigate, userData}) => {
         packingCount,
         completedCount,
         pendingCount,
+        shipmentValue,
         total: completedCount + pendingCount,
       });
     } catch (error) {
@@ -491,6 +496,7 @@ const DashboardScreen = ({onNavigate, userData}) => {
       value: exportStats.completedExportCount.toString(),
       badge: `Pending: ${exportStats.exportPendingCount}`,
       trend: `Packing List: ${exportStats.totalPackagingCount}`,
+      shipmentValue: exportStats.shipmentValue,
       color: '#3b82f6',
       screen: 'exportDoc',
     },
@@ -554,6 +560,7 @@ const DashboardScreen = ({onNavigate, userData}) => {
 
   const realizationTracking = {
     title: 'Realization Tracking',
+    shipment: formatCurrency(exportStats.shipmentValue),
     expected: formatCurrency(realizationStats.expectedValue),
     realized: formatCurrency(realizationStats.realizedValue),
     pending: formatCurrency(realizationStats.pendingValue),
@@ -593,6 +600,11 @@ const DashboardScreen = ({onNavigate, userData}) => {
             </View>
             <Text style={styles.statValue}>{card.value}</Text>
             <Text style={styles.statLabel}>{card.title}</Text>
+            {card.id === 1 ? (
+              <Text style={styles.statShipmentValue}>
+                Export Value: {formatCurrency(card.shipmentValue)}
+              </Text>
+            ) : null}
             <View style={styles.statFooter}>
               <Text style={styles.statFooterText}>{card.trend}</Text>
             </View>
@@ -621,6 +633,15 @@ const DashboardScreen = ({onNavigate, userData}) => {
         </View>
 
         <View style={styles.realizationStats}>
+          <View style={styles.realizationItem}>
+            <Text style={styles.realizationLabel}>Export</Text>
+            <Text style={styles.realizationValue}>
+              {realizationTracking.shipment}
+            </Text>
+          </View>
+
+          <View style={styles.realizationDivider} />
+
           <View style={styles.realizationItem}>
             <Text style={styles.realizationLabel}>Expected</Text>
             <Text style={styles.realizationValue}>
@@ -743,6 +764,12 @@ const styles = StyleSheet.create({
   statLabel: {
     fontSize: 11,
     color: 'rgba(255,255,255,0.9)',
+  },
+  statShipmentValue: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.95)',
+    marginTop: 4,
   },
   statFooter: {
     marginTop: 8,
