@@ -13,14 +13,15 @@ import {
   FlatList,
   Alert,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const ExportDocsScreen = () => {
+const ExportDocsScreen = ({userData}) => {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [exportData, setExportData] = useState([]);
   const [filteredData, setFilteredData] = useState([]);
 
-  // Buyer summary states - NEW API
+  // Buyer summary states - NEW API*
   const [buyerSummaryData, setBuyerSummaryData] = useState([]);
   const [filteredBuyerData, setFilteredBuyerData] = useState([]);
   const [buyerLoading, setBuyerLoading] = useState(false);
@@ -47,6 +48,14 @@ const ExportDocsScreen = () => {
   const [departmentList, setDepartmentList] = useState([]);
   const [loadingDepartments, setLoadingDepartments] = useState(false);
   const [departmentsFetched, setDepartmentsFetched] = useState(false);
+  const [departmentAccess, setDepartmentAccess] = useState({
+    loaded: false,
+    isRestricted: true,
+    assignedDepartments: [],
+    queryValues: [],
+    keyValues: [],
+    profile: null,
+  });
 
   // Search state for export data
   const [searchText, setSearchText] = useState('');
@@ -85,52 +94,604 @@ const ExportDocsScreen = () => {
   // Generate years (2020-2030)
   const years = Array.from({length: 11}, (_, i) => String(2025 + i));
 
-  // Fetch departments and buyer summary on component mount
+  const normalizeText = value => String(value || '').trim().toLowerCase();
+
+  const normalizeArray = data => {
+    if (Array.isArray(data)) {
+      return data;
+    }
+
+    if (Array.isArray(data?.data)) {
+      return data.data;
+    }
+
+    if (Array.isArray(data?.result)) {
+      return data.result;
+    }
+
+    if (Array.isArray(data?.items)) {
+      return data.items;
+    }
+
+    if (data && typeof data === 'object') {
+      return [data];
+    }
+
+    return [];
+  };
+
+  const addUniqueText = (list, value) => {
+    const textValue = String(value || '').trim();
+    const key = normalizeText(textValue);
+
+    if (
+      textValue &&
+      key !== '0' &&
+      key !== 'null' &&
+      key !== 'undefined' &&
+      !list.some(item => normalizeText(item) === key)
+    ) {
+      list.push(textValue);
+    }
+  };
+
+  const getStoredJsonValue = async key => {
+    try {
+      const storedValue = await AsyncStorage.getItem(key);
+
+      if (!storedValue) {
+        return null;
+      }
+
+      return JSON.parse(storedValue);
+    } catch (error) {
+      return null;
+    }
+  };
+
+  const getAccessTokenFromPayload = payload => {
+    return (
+      payload?.accessToken ||
+      payload?.token ||
+      payload?.jwtToken ||
+      payload?.data?.accessToken ||
+      payload?.user?.accessToken ||
+      payload?.profile?.accessToken ||
+      ''
+    );
+  };
+
+  const getUserIdFromPayload = payload => {
+    return (
+      payload?.recId ||
+      payload?.userId ||
+      payload?.id ||
+      payload?.data?.recId ||
+      payload?.data?.userId ||
+      payload?.user?.recId ||
+      payload?.user?.userId ||
+      payload?.profile?.recId ||
+      payload?.profile?.userId ||
+      null
+    );
+  };
+
+  const getDepartmentsFromPayload = payload => {
+    return normalizeArray(
+      payload?.departments ||
+        payload?.department ||
+        payload?.assignedDepartments ||
+        payload?.data?.departments ||
+        payload?.user?.departments ||
+        payload?.profile?.departments ||
+        [],
+    );
+  };
+
+  const getRolesFromPayload = payload => {
+    return normalizeArray(
+      payload?.roles ||
+        payload?.role ||
+        payload?.data?.roles ||
+        payload?.user?.roles ||
+        payload?.profile?.roles ||
+        [],
+    );
+  };
+
+  const hasAdminRole = payload => {
+    const roleText = getRolesFromPayload(payload)
+      .map(role =>
+        normalizeText(
+          role?.roleName || role?.name || role?.userTypeName || role?.title || role,
+        ),
+      )
+      .join(' ');
+
+    return (
+      roleText.includes('super-admin') ||
+      roleText.includes('super admin') ||
+      roleText.includes('superadmin') ||
+      roleText.includes('admin')
+    );
+  };
+
+  const getAuthPayloads = async () => {
+    const keys = [
+      'userData',
+      'userInfo',
+      'user',
+      'authUser',
+      'loginUser',
+      'loggedInUser',
+      'currentUser',
+      'profile',
+      'userProfile',
+      'auth',
+      'authData',
+      'loginData',
+      'loginResponse',
+      'session',
+    ];
+
+    const storedPayloads = await Promise.all(keys.map(key => getStoredJsonValue(key)));
+
+    return [userData, ...storedPayloads].filter(Boolean);
+  };
+
+  const buildRequestHeaders = async () => {
+    const payloads = await getAuthPayloads();
+    const token = payloads.map(getAccessTokenFromPayload).find(Boolean);
+    const headers = {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    };
+
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+
+    return headers;
+  };
+
+  const fetchJsonWithAuth = async url => {
+    const headers = await buildRequestHeaders();
+    const response = await fetch(url, {
+      method: 'GET',
+      headers,
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    return response.json();
+  };
+
+  const fetchDepartmentMasterData = async () => {
+    const endpoints = [
+      '/api/Department/get-all-department',
+      '/api/Export/get-all-department',
+      '/api/Export/Get-All-Department',
+      '/api/Export/Get-All-Departments',
+      '/api/Export/GetAllDepartment',
+    ];
+
+    for (const endpoint of endpoints) {
+      try {
+        const data = await fetchJsonWithAuth(`${API_BASE_URL}${endpoint}`);
+        const rows = normalizeArray(data);
+
+        if (rows.length) {
+          return rows;
+        }
+      } catch (error) {
+        // Try next possible endpoint.
+      }
+    }
+
+    return [];
+  };
+
+  const resolveLoggedInUserProfile = async () => {
+    const payloads = await getAuthPayloads();
+    const profilePayload = payloads.find(payload => getDepartmentsFromPayload(payload).length);
+
+    if (profilePayload) {
+      return profilePayload;
+    }
+
+    const userId = payloads.map(getUserIdFromPayload).find(Boolean);
+
+    if (!userId) {
+      return userData || {};
+    }
+
+    try {
+      const profileData = await fetchJsonWithAuth(
+        `${API_BASE_URL}/api/User/${encodeURIComponent(userId)}/profile`,
+      );
+
+      return profileData || userData || {};
+    } catch (error) {
+      console.error('Error loading logged-in user profile:', error);
+      return userData || {};
+    }
+  };
+
+  const getDepartmentTokenValues = item => {
+    return [
+      item?.recId,
+      item?.id,
+      item?.departmentId,
+      item?.departmentRecId,
+      item?.deptId,
+      item?.departmentCode,
+      item?.deptCode,
+      item?.depCode,
+      item?.departmentName,
+      item?.deptName,
+      item?.depName,
+      item?.name,
+      item?.custDept,
+      item?.customerCode,
+      item?.customerName,
+      item?.buyerNameCode,
+      item?.buyerName,
+      item?.__queryDepName,
+    ];
+  };
+
+  const getDepartmentQueryValuesFromItem = item => {
+    const values = [];
+
+    // depName API must be called by department code/name only.
+    // Do not use buyerName/customerName here, otherwise a buyer like HnM
+    // can return all HnM departments instead of the assigned department only.
+    [
+      item?.departmentCode,
+      item?.deptCode,
+      item?.depCode,
+      item?.departmentName,
+      item?.deptName,
+      item?.depName,
+      item?.name,
+      item?.custDept,
+      item?.__queryDepName,
+    ].forEach(value => addUniqueText(values, value));
+
+    return values;
+  };
+
+  const buildDepartmentAccessFromProfile = (profileData, departmentMasterData) => {
+    const assignedDepartments = getDepartmentsFromPayload(profileData);
+    const masterRows = normalizeArray(departmentMasterData);
+    const keyValues = [];
+    const queryValues = [];
+
+    assignedDepartments.forEach(department => {
+      getDepartmentTokenValues(department).forEach(value =>
+        addUniqueText(keyValues, value),
+      );
+      getDepartmentQueryValuesFromItem(department).forEach(value =>
+        addUniqueText(queryValues, value),
+      );
+
+      const departmentKeys = getDepartmentTokenValues(department).map(normalizeText);
+
+      masterRows.forEach(masterDepartment => {
+        const masterKeys = getDepartmentTokenValues(masterDepartment).map(normalizeText);
+        const isSame = departmentKeys.some(key => key && masterKeys.includes(key));
+
+        if (isSame) {
+          getDepartmentTokenValues(masterDepartment).forEach(value =>
+            addUniqueText(keyValues, value),
+          );
+          getDepartmentQueryValuesFromItem(masterDepartment).forEach(value =>
+            addUniqueText(queryValues, value),
+          );
+        }
+      });
+    });
+
+    // Important: if a Super-Admin has assigned departments, show ONLY those departments.
+    // If a Super-Admin/Admin has no assigned departments, allow all data.
+    const isRestricted = assignedDepartments.length > 0 ? true : !hasAdminRole(profileData);
+
+    return {
+      loaded: true,
+      isRestricted,
+      assignedDepartments,
+      queryValues,
+      keyValues: keyValues.map(normalizeText),
+      profile: profileData,
+    };
+  };
+
+  const loadDepartmentAccess = async () => {
+    const [profileData, departmentMasterData] = await Promise.all([
+      resolveLoggedInUserProfile(),
+      fetchDepartmentMasterData(),
+    ]);
+    const access = buildDepartmentAccessFromProfile(
+      profileData,
+      departmentMasterData,
+    );
+
+    setDepartmentAccess(access);
+    return access;
+  };
+
+  const isRowAllowedForAccess = (row, access = departmentAccess) => {
+    if (!access?.isRestricted) {
+      return true;
+    }
+
+    if (!access?.keyValues?.length) {
+      return false;
+    }
+
+    const rowKeys = getDepartmentTokenValues(row).map(normalizeText);
+    return rowKeys.some(key => key && access.keyValues.includes(key));
+  };
+
+  const getAllowedDepartmentQueries = (
+    access = departmentAccess,
+    deptCode = '',
+    deptName = '',
+  ) => {
+    const requestedValues = [];
+    addUniqueText(requestedValues, deptCode);
+    addUniqueText(requestedValues, deptName);
+
+    if (!access?.isRestricted) {
+      return requestedValues.length ? requestedValues : [''];
+    }
+
+    const allowedValues = [];
+    const requestedKeys = requestedValues.map(normalizeText);
+
+    if (requestedValues.length) {
+      requestedValues.forEach(value => {
+        if (access.keyValues?.includes(normalizeText(value))) {
+          addUniqueText(allowedValues, value);
+        }
+      });
+
+      if (!allowedValues.length) {
+        return [];
+      }
+
+      return allowedValues;
+    }
+
+    (access?.queryValues || []).forEach(value => addUniqueText(allowedValues, value));
+    return allowedValues;
+  };
+
+  const fetchRowsFromEndpointByDepName = async (
+    endpoint,
+    access = departmentAccess,
+    deptCode = '',
+    deptName = '',
+  ) => {
+    const queryValues = getAllowedDepartmentQueries(access, deptCode, deptName);
+    let mergedRows = [];
+
+    for (const queryValue of queryValues) {
+      const queryText = String(queryValue || '').trim();
+      const url = queryText
+        ? `${API_BASE_URL}${endpoint}?depName=${encodeURIComponent(queryText)}`
+        : `${API_BASE_URL}${endpoint}`;
+      const data = await fetchJsonWithAuth(url);
+      const rows = normalizeArray(data).map(item => ({
+        ...item,
+        __queryDepName: queryText,
+      }));
+
+      mergedRows = [...mergedRows, ...rows];
+    }
+
+    if (access?.isRestricted) {
+      return mergedRows.filter(row => isRowAllowedForAccess(row, access));
+    }
+
+    return mergedRows;
+  };
+
+
+  const getUniqueExportDocumentKey = item => {
+    const keyValue =
+      item?.expDocumentNo ||
+      item?.exportDocument ||
+      item?.exportDocumentNo ||
+      item?.packagingListNo ||
+      item?.packingListNo ||
+      item?.recId ||
+      item?.id ||
+      '';
+
+    return normalizeText(keyValue);
+  };
+
+  const removeDuplicateExportDocuments = data => {
+    const seenKeys = {};
+
+    return (Array.isArray(data) ? data : []).filter((item, index) => {
+      const key = getUniqueExportDocumentKey(item) || `row-${index}`;
+
+      if (seenKeys[key]) {
+        return false;
+      }
+
+      seenKeys[key] = true;
+      return true;
+    });
+  };
+
+  const getDepartmentCodeValue = item =>
+    String(
+      item?.departmentCode ||
+        item?.deptCode ||
+        item?.depCode ||
+        item?.__queryDepName ||
+        '',
+    ).trim();
+
+  const getDepartmentNameValue = item =>
+    String(
+      item?.departmentName ||
+        item?.deptName ||
+        item?.depName ||
+        item?.customerName ||
+        item?.buyerName ||
+        item?.__queryDepName ||
+        '',
+    ).trim();
+
+  const isSameDepartment = (item, deptCode, deptName) => {
+    const selectedValues = [];
+    addUniqueText(selectedValues, deptCode);
+    addUniqueText(selectedValues, deptName);
+
+    if (!selectedValues.length) {
+      return true;
+    }
+
+    const rowKeys = getDepartmentTokenValues(item).map(normalizeText);
+    return selectedValues.some(value => rowKeys.includes(normalizeText(value)));
+  };
+
+  const fetchDepartmentExportDocuments = async (
+    deptCode,
+    deptName,
+    accessOverride = departmentAccess,
+  ) => {
+    const rows = await fetchRowsFromEndpointByDepName(
+      '/api/Export/Get-By-Dept-Export-Docment-List',
+      accessOverride,
+      deptCode,
+      deptName,
+    );
+
+    return removeDuplicateExportDocuments(
+      rows.filter(item => isSameDepartment(item, deptCode, deptName)),
+    );
+  };
+
+  const updateDepartmentPendingCount = (deptCode, deptName, count) => {
+    const updater = list =>
+      (Array.isArray(list) ? list : [])
+        .map(item =>
+          isSameDepartment(item, deptCode, deptName)
+            ? {...item, pendingExpDocument: count, pendingExportCount: count}
+            : item,
+        )
+        .filter(item => (item?.pendingExpDocument || 0) > 0);
+
+    setBuyerSummaryData(prev => updater(prev));
+    setFilteredBuyerData(prev => updater(prev));
+    setDepartmentList(prev => updater(prev));
+    setBuyerTotalItems(prev => prev);
+  };
+
+  const buildPendingDepartmentsFromActualDocs = async (
+    dataArray,
+    accessOverride = departmentAccess,
+  ) => {
+    const baseDepartments = normalizeArray(dataArray)
+      .filter(item => (item?.pendingExportCount || item?.pendingExpDocument || 0) > 0)
+      .filter(item => isRowAllowedForAccess(item, accessOverride))
+      .map((item, index) => ({
+        ...item,
+        departmentId:
+          item?.departmentId ||
+          item?.recId ||
+          item?.departmentCode ||
+          item?.__queryDepName ||
+          index + 1,
+        pendingExpDocument:
+          item?.pendingExpDocument || item?.pendingExportCount || 0,
+        apiPendingExpDocument:
+          item?.pendingExportCount || item?.pendingExpDocument || 0,
+        customerName:
+          item?.customerName || item?.buyerName || item?.departmentName || 'Unknown',
+        departmentName:
+          item?.departmentName || item?.departmentCode || item?.__queryDepName || '-',
+        departmentCode: item?.departmentCode || item?.__queryDepName || '',
+      }));
+
+    const departmentsWithActualCount = await Promise.all(
+      baseDepartments.map(async department => {
+        try {
+          const departmentDocuments = await fetchDepartmentExportDocuments(
+            department.departmentCode,
+            department.departmentName,
+            accessOverride,
+          );
+          const dateFilteredDocuments = filterBySelectedDates(departmentDocuments);
+          const actualPendingCount = dateFilteredDocuments.length;
+
+          return {
+            ...department,
+            pendingExpDocument: actualPendingCount,
+            pendingExportCount: actualPendingCount,
+          };
+        } catch (error) {
+          console.error(
+            'Error syncing pending count for department:',
+            department.departmentCode || department.departmentName,
+            error,
+          );
+
+          return department;
+        }
+      }),
+    );
+
+    return departmentsWithActualCount
+      .filter(item => (item?.pendingExpDocument || 0) > 0)
+      .sort((a, b) => (b?.pendingExpDocument || 0) - (a?.pendingExpDocument || 0));
+  };
+
+  // Fetch logged-in user department access first, then load only allowed data.
   useEffect(() => {
-    fetchDepartmentsAndSummary();
-    fetchExportData();
+    const initScreen = async () => {
+      const access = await loadDepartmentAccess();
+      await Promise.all([fetchDepartmentsAndSummary(access), fetchExportData(access)]);
+    };
+
+    initScreen();
   }, []);
 
+  // If date filter changes, rebuild card count from the real document list.
+  useEffect(() => {
+    if (departmentsFetched && departmentAccess.loaded) {
+      fetchDepartmentsAndSummary(departmentAccess);
+      fetchExportData(departmentAccess);
+    }
+  }, [fromDate, toDate]);
+
   // Fetch departments AND buyer summary together
-  const fetchDepartmentsAndSummary = async () => {
+  const fetchDepartmentsAndSummary = async (accessOverride = departmentAccess) => {
     setBuyerLoading(true);
 
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/Export/Get-Pending-Export-Document-Count`,
-        {
-          method: 'GET',
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-          },
-        },
+      const activeAccess = accessOverride?.loaded
+        ? accessOverride
+        : await loadDepartmentAccess();
+      const dataArray = await fetchRowsFromEndpointByDepName(
+        '/api/Export/Get-Pending-Export-Document-Count',
+        activeAccess,
       );
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      const dataArray = Array.isArray(data) ? data : data ? [data] : [];
-
-      // New API returns department-wise rows.
-      // Keep only departments with pending export documents.
-      const pendingDepartments = dataArray
-        .filter(item => (item?.pendingExportCount || 0) > 0)
-        .map(item => ({
-          ...item,
-
-          // IMPORTANT: map new API field to old UI field
-          pendingExpDocument: item?.pendingExportCount || 0,
-
-          customerName: item?.customerName || item?.departmentName || 'Unknown',
-          departmentName: item?.departmentName || item?.departmentCode || '-',
-          departmentCode: item?.departmentCode || '',
-        }))
-        .sort(
-          (a, b) => (b?.pendingExpDocument || 0) - (a?.pendingExpDocument || 0),
-        );
+      // Summary API count and details API row count can differ.
+      // Card count should match the documents shown after opening the card.
+      // So pendingExpDocument is synced from Get-By-Dept-Export-Docment-List.
+      const pendingDepartments = await buildPendingDepartmentsFromActualDocs(
+        dataArray,
+        activeAccess,
+      );
 
       setBuyerSummaryData(pendingDepartments);
       setFilteredBuyerData(pendingDepartments);
@@ -523,37 +1084,37 @@ const ExportDocsScreen = () => {
   };
 
   // Fetch Export Data for Modal
-  const fetchModalExportData = async (deptCode, deptName) => {
+  const fetchModalExportData = async (
+    deptCode,
+    deptName,
+    accessOverride = departmentAccess,
+  ) => {
     setModalLoading(true);
 
     try {
-      let url = `${API_BASE_URL}/api/Export/Get-By-Dept-Export-Docment-List?depName=${encodeURIComponent(
-        deptCode || '',
-      )}`;
-
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      let dataArray = Array.isArray(data) ? data : data ? [data] : [];
-
+      const activeAccess = accessOverride?.loaded
+        ? accessOverride
+        : await loadDepartmentAccess();
+      const dataArray = await fetchDepartmentExportDocuments(
+        deptCode,
+        deptName,
+        activeAccess,
+      );
       const dateFilteredArray = filterBySelectedDates(dataArray);
+
+      // Keep card pending count and modal record count the same.
+      updateDepartmentPendingCount(
+        deptCode,
+        deptName,
+        dateFilteredArray.length,
+      );
 
       setModalExportData(dateFilteredArray);
       setModalFilteredData(dateFilteredArray);
       setModalTotalItems(dateFilteredArray.length);
       setModalCurrentPage(1);
       setModalDepartmentName(deptName);
+      setModalSearchText('');
     } catch (error) {
       console.error('Fetch error:', error);
       setModalExportData([]);
@@ -728,80 +1289,34 @@ const ExportDocsScreen = () => {
         : item?.customerName || item?.departmentName || 'Unknown';
 
     setModalDepartmentName(displayTitle);
-    await fetchModalExportData(item?.departmentCode, displayTitle);
+    await fetchModalExportData(
+      item?.departmentCode || item?.__queryDepName,
+      item?.departmentName || item?.customerName || item?.__queryDepName,
+      departmentAccess,
+    );
     setShowDetailsModal(true);
   };
 
   // Fetch Export Data from API with department parameter
-  const fetchExportData = async () => {
+  const fetchExportData = async (
+    accessOverride = departmentAccess,
+    overrideDeptCode = departmentCode,
+    overrideDeptName = departmentName,
+  ) => {
     setLoading(true);
     setError('');
 
     try {
-      let url = `${API_BASE_URL}/api/Export/Get-By-Dept-Export-Docment-List`;
-
-      if (departmentCode) {
-        url += `?depName=${encodeURIComponent(departmentCode)}`;
-      }
-
-      console.log('Fetching URL:', url);
-
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      console.log(
-        'Data received:',
-        Array.isArray(data) ? data.length : 'Not array',
+      const activeAccess = accessOverride?.loaded
+        ? accessOverride
+        : await loadDepartmentAccess();
+      const dataArray = await fetchDepartmentExportDocuments(
+        overrideDeptCode,
+        overrideDeptName,
+        activeAccess,
       );
 
-      let dataArray = [];
-      if (Array.isArray(data)) {
-        dataArray = data;
-      } else if (data && typeof data === 'object') {
-        dataArray = [data];
-      } else {
-        dataArray = [];
-      }
-
-      let filteredByDate = dataArray;
-      if (fromDate && toDate) {
-        const fromDateObj = parseDateString(fromDate);
-        const toDateObj = parseDateString(toDate);
-
-        filteredByDate = dataArray.filter(item => {
-          if (!item.exFacDate) {
-            return false;
-          }
-          const itemDate = new Date(item.exFacDate);
-          return itemDate >= fromDateObj && itemDate <= toDateObj;
-        });
-      } else if (fromDate) {
-        const fromDateObj = parseDateString(fromDate);
-        filteredByDate = dataArray.filter(item => {
-          if (!item.exFacDate) {
-            return false;
-          }
-          return new Date(item.exFacDate) >= fromDateObj;
-        });
-      } else if (toDate) {
-        const toDateObj = parseDateString(toDate);
-        filteredByDate = dataArray.filter(item => {
-          if (!item.exFacDate) {
-            return false;
-          }
-          return new Date(item.exFacDate) <= toDateObj;
-        });
-      }
+      const filteredByDate = filterBySelectedDates(dataArray);
 
       setExportData(filteredByDate);
       setTotalItems(filteredByDate.length);
@@ -877,13 +1392,16 @@ const ExportDocsScreen = () => {
     setCurrentPage(1);
 
     setTimeout(() => {
-      fetchExportData();
+      fetchExportData(departmentAccess, dept.departmentCode, dept.departmentName);
     }, 100);
   };
 
   const onRefresh = () => {
     setRefreshing(true);
-    Promise.all([fetchDepartmentsAndSummary(), fetchExportData()]).then(() => {
+    Promise.all([
+      fetchDepartmentsAndSummary(departmentAccess),
+      fetchExportData(departmentAccess),
+    ]).then(() => {
       setRefreshing(false);
     });
   };
@@ -896,7 +1414,7 @@ const ExportDocsScreen = () => {
   };
 
   const handleApply = () => {
-    fetchExportData();
+    fetchExportData(departmentAccess);
   };
 
   const handleReset = () => {
@@ -919,7 +1437,7 @@ const ExportDocsScreen = () => {
             setError('');
 
             setTimeout(() => {
-              fetchExportData();
+              fetchExportData(departmentAccess, '', '');
             }, 100);
           },
           style: 'destructive',
@@ -1174,7 +1692,9 @@ const ExportDocsScreen = () => {
           ) : (
             <FlatList
               data={departmentList}
-              keyExtractor={item => item.departmentId.toString()}
+              keyExtractor={(item, index) =>
+                String(item?.departmentId || item?.recId || item?.departmentCode || index)
+              }
               showsVerticalScrollIndicator={true}
               style={styles.departmentList}
               renderItem={({item}) => (
@@ -1581,7 +2101,7 @@ const ExportDocsScreen = () => {
           <View>
             <Text style={styles.sectionTitle}>📊 Pending Summary</Text>
             <Text style={styles.summaryHeaderSubText}>
-              Overview by active department
+              Only assigned department data
             </Text>
           </View>
 

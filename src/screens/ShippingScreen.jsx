@@ -11,8 +11,9 @@ import {
   RefreshControl,
   Modal,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const ShippingScreen = () => {
+const ShippingScreen = ({userData}) => {
   const [refreshing, setRefreshing] = useState(false);
 
   // Pending shipping summary states
@@ -54,6 +55,300 @@ const ShippingScreen = () => {
     String(i + 1).padStart(2, '0'),
   );
   const years = Array.from({length: 11}, (_, i) => String(2025 + i));
+
+
+  const normalizeArray = data => {
+    if (Array.isArray(data)) {
+      return data;
+    }
+
+    if (Array.isArray(data?.data)) {
+      return data.data;
+    }
+
+    if (Array.isArray(data?.result)) {
+      return data.result;
+    }
+
+    if (Array.isArray(data?.items)) {
+      return data.items;
+    }
+
+    if (data && typeof data === 'object') {
+      return [data];
+    }
+
+    return [];
+  };
+
+  const normalizeText = value => String(value || '').trim().toLowerCase();
+
+  const getUniqueRowKey = (item, index) =>
+    normalizeText(
+      item?.shippingId ||
+        item?.expDocumentNo ||
+        item?.exportDocumentNo ||
+        item?.packagingListNo ||
+        item?.packingListNo ||
+        item?.departmentCode ||
+        item?.departmentName ||
+        item?.customerName ||
+        item?.recId ||
+        item?.id ||
+        `row-${index}`,
+    );
+
+  const removeDuplicateRows = rows => {
+    const seen = new Set();
+
+    return normalizeArray(rows).filter((item, index) => {
+      const key = getUniqueRowKey(item, index);
+
+      if (seen.has(key)) {
+        return false;
+      }
+
+      seen.add(key);
+      return true;
+    });
+  };
+
+  const getStoredJsonValue = async key => {
+    try {
+      const value = await AsyncStorage.getItem(key);
+
+      if (!value) {
+        return null;
+      }
+
+      return JSON.parse(value);
+    } catch (storageError) {
+      console.log(`Unable to read ${key} from storage`, storageError);
+      return null;
+    }
+  };
+
+  const getUserIdFromPayload = payload =>
+    payload?.recId ||
+    payload?.userId ||
+    payload?.id ||
+    payload?.profile?.recId ||
+    payload?.profile?.userId ||
+    payload?.profile?.id ||
+    payload?.user?.recId ||
+    payload?.user?.userId ||
+    payload?.user?.id ||
+    payload?.data?.recId ||
+    payload?.data?.userId ||
+    payload?.data?.id ||
+    null;
+
+  const getAccessTokenFromPayload = payload =>
+    payload?.accessToken ||
+    payload?.token ||
+    payload?.jwtToken ||
+    payload?.data?.accessToken ||
+    payload?.user?.accessToken ||
+    userData?.accessToken ||
+    '';
+
+  const getProfileFromPayload = payload => {
+    if (!payload) {
+      return null;
+    }
+
+    if (normalizeArray(payload?.departments).length) {
+      return payload;
+    }
+
+    if (normalizeArray(payload?.profile?.departments).length) {
+      return payload.profile;
+    }
+
+    if (normalizeArray(payload?.user?.departments).length) {
+      return payload.user;
+    }
+
+    if (normalizeArray(payload?.data?.departments).length) {
+      return payload.data;
+    }
+
+    return null;
+  };
+
+  const getStoredAuthPayload = async () => {
+    const storageKeys = [
+      'userData',
+      'userInfo',
+      'user',
+      'authUser',
+      'authData',
+      'loginUser',
+      'loggedInUser',
+      'currentUser',
+      'profile',
+      'userProfile',
+    ];
+
+    for (const key of storageKeys) {
+      const payload = await getStoredJsonValue(key);
+
+      if (payload) {
+        return payload;
+      }
+    }
+
+    return null;
+  };
+
+  const fetchLoggedInUserProfile = async () => {
+    const storedPayload = await getStoredAuthPayload();
+    const profileFromPayload =
+      getProfileFromPayload(userData) || getProfileFromPayload(storedPayload);
+
+    if (profileFromPayload) {
+      return profileFromPayload;
+    }
+
+    const userId = getUserIdFromPayload(userData) || getUserIdFromPayload(storedPayload);
+
+    if (!userId) {
+      console.warn('Shipping access: logged-in user id not found');
+      return userData || storedPayload || null;
+    }
+
+    try {
+      const token = getAccessTokenFromPayload(userData) || getAccessTokenFromPayload(storedPayload);
+      const response = await fetch(`${API_BASE_URL}/api/User/${userId}/profile`, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          ...(token ? {Authorization: `Bearer ${token}`} : {}),
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      return response.json();
+    } catch (profileError) {
+      console.error('Error fetching logged-in user profile:', profileError);
+      return userData || storedPayload || null;
+    }
+  };
+
+  const getAssignedDepartments = profile =>
+    normalizeArray(
+      profile?.departments ||
+        profile?.department ||
+        profile?.assignedDepartments ||
+        profile?.profile?.departments ||
+        profile?.user?.departments ||
+        profile?.data?.departments ||
+        [],
+    );
+
+  const getDepartmentQueryValues = department => {
+    const values = [
+      department?.departmentCode,
+      department?.deptCode,
+      department?.depCode,
+      department?.departmentName,
+      department?.deptName,
+      department?.depName,
+      department?.name,
+    ]
+      .map(value => String(value || '').trim())
+      .filter(Boolean);
+
+    return values.filter(
+      (value, index, allValues) =>
+        allValues.findIndex(item => normalizeText(item) === normalizeText(value)) === index,
+    );
+  };
+
+  const getAuthorizedDepartments = async () => {
+    const profile = await fetchLoggedInUserProfile();
+    const assignedDepartments = getAssignedDepartments(profile);
+
+    // If any department is assigned, screen must load only those departments,
+    // even for Super-Admin or Admin users.
+    if (assignedDepartments.length) {
+      return assignedDepartments;
+    }
+
+    // IMPORTANT:
+    // No assigned department means unrestricted access, same as previous behavior.
+    // Do NOT return "All Departments" as depName, because backend will search
+    // depName=All Departments and return 0. Empty array means call API without depName.
+    return [];
+  };
+
+  const buildDepartmentEndpointUrl = (endpoint, queryValue = '') => {
+    const cleanQueryValue = String(queryValue || '').trim();
+
+    if (!cleanQueryValue) {
+      return `${API_BASE_URL}${endpoint}`;
+    }
+
+    const separator = endpoint.includes('?') ? '&' : '?';
+
+    return `${API_BASE_URL}${endpoint}${separator}depName=${encodeURIComponent(
+      cleanQueryValue,
+    )}`;
+  };
+
+  const fetchRowsForDepartment = async (endpoint, department) => {
+    const queryValues = getDepartmentQueryValues(department);
+    const finalQueryValues = queryValues.length ? queryValues : [''];
+
+    for (const queryValue of finalQueryValues) {
+      const url = buildDepartmentEndpointUrl(endpoint, queryValue);
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const rows = normalizeArray(await response.json());
+
+      // Use first matching query that returns data. This prevents double count
+      // when both departmentCode and departmentName return the same rows.
+      if (rows.length || !queryValue) {
+        return rows;
+      }
+    }
+
+    return [];
+  };
+
+  const fetchRowsForAuthorizedDepartments = async endpoint => {
+    const authorizedDepartments = await getAuthorizedDepartments();
+
+    // Admin/Super-Admin/no-department user: show all data exactly like before.
+    // This calls the old endpoint without depName instead of depName=All Departments.
+    if (!authorizedDepartments.length) {
+      return removeDuplicateRows(await fetchRowsForDepartment(endpoint, null));
+    }
+
+    let mergedRows = [];
+
+    for (const department of authorizedDepartments) {
+      const rows = await fetchRowsForDepartment(endpoint, department);
+      mergedRows = [...mergedRows, ...rows];
+    }
+
+    return removeDuplicateRows(mergedRows);
+  };
 
   useEffect(() => {
     fetchShippingSummary();
@@ -136,38 +431,18 @@ const ShippingScreen = () => {
     setError('');
 
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/Export/Get-Pending-Shipping-Date-Count`,
-        {
-          method: 'GET',
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-          },
-        },
+      const dataArray = await fetchRowsForAuthorizedDepartments(
+        '/api/Export/Get-Pending-Shipping-Date-Count',
       );
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      let dataArray = [];
-      if (Array.isArray(data)) {
-        dataArray = data;
-      } else if (data && typeof data === 'object') {
-        dataArray = [data];
-      }
-
-      // New API returns department-wise shipping pending rows.
-      // Show one card per department where pendingShippingDateCount > 0.
+      // API is called by assigned depName, so summary is already restricted.
       const pendingShippingDepartments = dataArray
         .filter(item => (item?.pendingShippingDateCount || 0) > 0)
-        .map(item => ({
+        .map((item, index) => ({
           ...item,
+          departmentId: item?.departmentId || item?.recId || index + 1,
 
-          // IMPORTANT: map new API field to old UI field
+          // IMPORTANT: map API field to old UI field.
           pendingShipping: item?.pendingShippingDateCount || 0,
 
           customerName: item?.customerName || item?.departmentName || 'Unknown',
@@ -182,7 +457,7 @@ const ShippingScreen = () => {
       setShippingSummaryData(pendingShippingDepartments);
       setShippingCurrentPage(1);
     } catch (fetchError) {
-      console.error('Error fetching pending shipping summary:', fetchError);
+      console.error('Error fetching restricted pending shipping summary:', fetchError);
       setShippingSummaryData([]);
       setShippingCurrentPage(1);
       setError(`Network error: ${fetchError.message}`);
@@ -300,30 +575,13 @@ const ShippingScreen = () => {
     setModalSearchText('');
 
     try {
-      let url = `${API_BASE_URL}/api/Export/Get-By-Dept-Shipping-Date-List?depName=${encodeURIComponent(
-        deptCode || '',
-      )}`;
-
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
+      const dataArray = await fetchRowsForDepartment(
+        '/api/Export/Get-By-Dept-Shipping-Date-List',
+        {
+          departmentCode: deptCode,
+          departmentName: deptName,
         },
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      let dataArray = [];
-      if (Array.isArray(data)) {
-        dataArray = data;
-      } else if (data && typeof data === 'object') {
-        dataArray = [data];
-      }
+      );
 
       const dateFilteredData = filterBySelectedDates(dataArray);
 
@@ -349,7 +607,7 @@ const ShippingScreen = () => {
 
     setModalDepartmentName(displayTitle);
     setShowDetailsModal(true);
-    await fetchModalShippingData(item?.departmentCode, displayTitle);
+    await fetchModalShippingData(item?.departmentCode, item?.departmentName || displayTitle);
   };
 
   const handleModalSearch = text => {

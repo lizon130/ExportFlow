@@ -11,10 +11,11 @@ import {
   RefreshControl,
   Modal,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const API_BASE_URL = 'http://192.168.9.45:7000';
 
-const BLScreen = () => {
+const BLScreen = ({userData} = {}) => {
   const [refreshing, setRefreshing] = useState(false);
 
   const [blSummaryData, setBlSummaryData] = useState([]);
@@ -66,8 +67,403 @@ const BLScreen = () => {
 
   const normalizeArray = data => {
     if (Array.isArray(data)) return data;
+
+    if (Array.isArray(data?.data)) return data.data;
+    if (Array.isArray(data?.result)) return data.result;
+    if (Array.isArray(data?.items)) return data.items;
+
     if (data && typeof data === 'object') return [data];
     return [];
+  };
+
+  const normalizeText = value => String(value ?? '').trim().toLowerCase();
+
+  const getNumber = value => {
+    const numberValue = Number(value || 0);
+    return Number.isFinite(numberValue) ? numberValue : 0;
+  };
+
+  const getStoredJsonValue = async key => {
+    try {
+      const rawValue = await AsyncStorage.getItem(key);
+
+      if (!rawValue) {
+        return null;
+      }
+
+      try {
+        return JSON.parse(rawValue);
+      } catch {
+        return rawValue;
+      }
+    } catch (error) {
+      console.error(`Error reading ${key} from AsyncStorage:`, error);
+      return null;
+    }
+  };
+
+  const getNestedValue = (data, fieldNames = []) => {
+    if (!data || typeof data !== 'object') {
+      return null;
+    }
+
+    for (const fieldName of fieldNames) {
+      if (data?.[fieldName] !== undefined && data?.[fieldName] !== null) {
+        return data[fieldName];
+      }
+    }
+
+    return null;
+  };
+
+  const getAccessTokenFromPayload = payload => {
+    if (!payload || typeof payload !== 'object') {
+      return '';
+    }
+
+    return (
+      payload?.accessToken ||
+      payload?.token ||
+      payload?.access_token ||
+      payload?.jwtToken ||
+      payload?.data?.accessToken ||
+      payload?.data?.token ||
+      payload?.user?.accessToken ||
+      payload?.profile?.accessToken ||
+      ''
+    );
+  };
+
+  const getUserIdFromPayload = payload => {
+    if (!payload || typeof payload !== 'object') {
+      return null;
+    }
+
+    return (
+      payload?.recId ||
+      payload?.userId ||
+      payload?.id ||
+      payload?.userRecId ||
+      payload?.profile?.recId ||
+      payload?.profile?.userId ||
+      payload?.user?.recId ||
+      payload?.user?.userId ||
+      payload?.data?.recId ||
+      payload?.data?.userId ||
+      payload?.data?.user?.recId ||
+      payload?.data?.user?.userId ||
+      null
+    );
+  };
+
+  const getProfileObjectFromPayload = payload => {
+    if (!payload || typeof payload !== 'object') {
+      return null;
+    }
+
+    return (
+      payload?.profile ||
+      payload?.userProfile ||
+      payload?.user ||
+      payload?.data?.profile ||
+      payload?.data?.user ||
+      payload?.data ||
+      payload
+    );
+  };
+
+  const getAuthHeaders = payload => {
+    const token = getAccessTokenFromPayload(payload || userData);
+
+    return token
+      ? {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        }
+      : {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        };
+  };
+
+  const getStoredUserPayload = async () => {
+    if (userData) {
+      return userData;
+    }
+
+    const storageKeys = [
+      'userData',
+      'userInfo',
+      'user',
+      'authUser',
+      'loginUser',
+      'loggedInUser',
+      'currentUser',
+      'profile',
+      'userProfile',
+    ];
+
+    for (const key of storageKeys) {
+      const storedValue = await getStoredJsonValue(key);
+
+      if (storedValue) {
+        return storedValue;
+      }
+    }
+
+    return null;
+  };
+
+  const fetchLoggedInUserProfile = async () => {
+    const storedPayload = await getStoredUserPayload();
+    const profileFromPayload = getProfileObjectFromPayload(storedPayload);
+    const existingDepartments = normalizeArray(
+      profileFromPayload?.departments || profileFromPayload?.department,
+    );
+
+    if (existingDepartments.length) {
+      return {profile: profileFromPayload, authPayload: storedPayload};
+    }
+
+    const userId = getUserIdFromPayload(storedPayload);
+
+    if (!userId) {
+      console.warn('B/L department access: logged-in user id not found');
+      return {profile: profileFromPayload || {}, authPayload: storedPayload};
+    }
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/User/${userId}/profile`, {
+        method: 'GET',
+        headers: getAuthHeaders(storedPayload),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const profile = await response.json();
+      return {profile, authPayload: storedPayload};
+    } catch (error) {
+      console.error('Error fetching logged-in user profile:', error);
+      return {profile: profileFromPayload || {}, authPayload: storedPayload};
+    }
+  };
+
+  const getUserRoles = profile =>
+    normalizeArray(profile?.roles || profile?.role || profile?.user?.roles || []);
+
+  const userCanSeeAllDepartments = profile => {
+    const assignedDepartments = getAssignedDepartments(profile);
+
+    // If the user has assigned departments, always restrict by those departments.
+    // Example: Super-Admin Sazzad has LPP assigned, so only LPP should show.
+    if (assignedDepartments.length) {
+      return false;
+    }
+
+    const roleText = getUserRoles(profile)
+      .map(role => normalizeText(role?.roleName || role?.name || role))
+      .join(' ');
+
+    return (
+      roleText.includes('super-admin') ||
+      roleText.includes('super admin') ||
+      roleText.includes('superadmin') ||
+      roleText.includes('admin')
+    );
+  };
+
+  const getAssignedDepartments = profile =>
+    normalizeArray(
+      profile?.departments ||
+        profile?.department ||
+        profile?.profile?.departments ||
+        profile?.user?.departments ||
+        [],
+    );
+
+  const pushUniqueQueryValue = (values, value) => {
+    const textValue = String(value || '').trim();
+
+    if (
+      textValue &&
+      !values.some(item => normalizeText(item) === normalizeText(textValue))
+    ) {
+      values.push(textValue);
+    }
+  };
+
+  const getDepartmentQueryValues = departments => {
+    const queryValues = [];
+
+    normalizeArray(departments).forEach(department => {
+      pushUniqueQueryValue(queryValues, department?.departmentCode);
+      pushUniqueQueryValue(queryValues, department?.deptCode);
+      pushUniqueQueryValue(queryValues, department?.depCode);
+      pushUniqueQueryValue(queryValues, department?.departmentName);
+      pushUniqueQueryValue(queryValues, department?.deptName);
+      pushUniqueQueryValue(queryValues, department?.depName);
+      pushUniqueQueryValue(queryValues, department?.name);
+    });
+
+    return queryValues;
+  };
+
+  const getDepartmentQueryValuesFromRow = item => {
+    const queryValues = [];
+
+    pushUniqueQueryValue(queryValues, item?.departmentCode);
+    pushUniqueQueryValue(queryValues, item?.deptCode);
+    pushUniqueQueryValue(queryValues, item?.depCode);
+    pushUniqueQueryValue(queryValues, item?.departmentName);
+    pushUniqueQueryValue(queryValues, item?.deptName);
+    pushUniqueQueryValue(queryValues, item?.depName);
+
+    return queryValues;
+  };
+
+  const buildDepartmentAccess = profile => {
+    const assignedDepartments = getAssignedDepartments(profile);
+
+    if (assignedDepartments.length) {
+      return {
+        isRestricted: true,
+        departments: assignedDepartments,
+        queryValues: getDepartmentQueryValues(assignedDepartments),
+      };
+    }
+
+    if (userCanSeeAllDepartments(profile)) {
+      return {isRestricted: false, departments: [], queryValues: ['']};
+    }
+
+    return {isRestricted: true, departments: [], queryValues: []};
+  };
+
+  const rowMatchesDepartmentAccess = (row, access) => {
+    if (!access?.isRestricted) {
+      return true;
+    }
+
+    if (!access?.departments?.length) {
+      return false;
+    }
+
+    const rowDepartmentCode = normalizeText(
+      row?.departmentCode || row?.deptCode || row?.depCode,
+    );
+    const rowDepartmentName = normalizeText(
+      row?.departmentName || row?.deptName || row?.depName,
+    );
+
+    // If backend already filtered by depName and row has no department fields, keep it.
+    if (!rowDepartmentCode && !rowDepartmentName) {
+      return true;
+    }
+
+    return access.departments.some(department => {
+      const allowedCodes = [
+        department?.departmentCode,
+        department?.deptCode,
+        department?.depCode,
+      ].map(normalizeText);
+      const allowedNames = [
+        department?.departmentName,
+        department?.deptName,
+        department?.depName,
+        department?.name,
+      ].map(normalizeText);
+      const allowedValues = [...allowedCodes, ...allowedNames].filter(Boolean);
+
+      return (
+        allowedValues.includes(rowDepartmentCode) ||
+        allowedValues.includes(rowDepartmentName)
+      );
+    });
+  };
+
+  const getBlSummaryUrl = deptName => {
+    const query = String(deptName || '').trim();
+
+    return query
+      ? `${API_BASE_URL}/api/Export/Get-Pending-BL-Date-Count?depName=${encodeURIComponent(
+          query,
+        )}`
+      : `${API_BASE_URL}/api/Export/Get-Pending-BL-Date-Count`;
+  };
+
+  const getUniqueBlSummaryKey = (item, index) => {
+    const keyValue = [
+      item?.departmentCode,
+      item?.departmentName,
+      item?.customerCode,
+      item?.customerName,
+    ]
+      .map(value => String(value || '').trim())
+      .filter(Boolean)
+      .join('|');
+
+    return normalizeText(keyValue) || `row-${index}`;
+  };
+
+  const mergeBlSummaryRows = rows => {
+    const rowMap = {};
+
+    normalizeArray(rows).forEach((row, index) => {
+      const key = getUniqueBlSummaryKey(row, index);
+      const pendingCount = getNumber(row?.pendingBLDateCount || row?.pendingBL);
+      const totalValue = getNumber(row?.totalValue);
+
+      if (!rowMap[key]) {
+        rowMap[key] = {...row};
+        return;
+      }
+
+      rowMap[key] = {
+        ...rowMap[key],
+        ...row,
+        pendingBLDateCount: Math.max(
+          getNumber(rowMap[key]?.pendingBLDateCount || rowMap[key]?.pendingBL),
+          pendingCount,
+        ),
+        pendingBL: Math.max(
+          getNumber(rowMap[key]?.pendingBLDateCount || rowMap[key]?.pendingBL),
+          pendingCount,
+        ),
+        totalValue: Math.max(getNumber(rowMap[key]?.totalValue), totalValue),
+      };
+    });
+
+    return Object.values(rowMap);
+  };
+
+  const getUniqueBlDetailKey = (item, index) => {
+    const keyValue =
+      item?.expDocumentNo ||
+      item?.exportDocumentNo ||
+      item?.packagingListNo ||
+      item?.recId ||
+      item?.id ||
+      '';
+
+    return normalizeText(keyValue) || `row-${index}`;
+  };
+
+  const removeDuplicateBlDetails = rows => {
+    const seenKeys = {};
+
+    return normalizeArray(rows).filter((item, index) => {
+      const key = getUniqueBlDetailKey(item, index);
+
+      if (seenKeys[key]) {
+        return false;
+      }
+
+      seenKeys[key] = true;
+      return true;
+    });
   };
 
   const getBlListUrl = (
@@ -90,38 +486,54 @@ const BLScreen = () => {
     setBlLoading(true);
 
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/Export/Get-Pending-BL-Date-Count`,
-        {
-          method: 'GET',
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-          },
-        },
-      );
+      const {profile, authPayload} = await fetchLoggedInUserProfile();
+      const access = buildDepartmentAccess(profile);
+      const queryValues = access.isRestricted ? access.queryValues : [''];
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      if (access.isRestricted && !queryValues.length) {
+        setBlSummaryData([]);
+        setFilteredBlData([]);
+        setBlCurrentPage(1);
+        return;
       }
 
-      const data = await response.json();
-      const dataArray = normalizeArray(data);
+      let mergedRows = [];
+
+      for (const queryValue of queryValues) {
+        const response = await fetch(getBlSummaryUrl(queryValue), {
+          method: 'GET',
+          headers: getAuthHeaders(authPayload),
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        const dataArray = normalizeArray(data).filter(item =>
+          rowMatchesDepartmentAccess(item, access),
+        );
+
+        mergedRows = [...mergedRows, ...dataArray];
+      }
+
+      // If code and name both return the same department, keep only one row.
+      const dataArray = mergeBlSummaryRows(mergedRows);
 
       // New API returns department-wise B/L pending rows.
-      // Show one card per department where pendingBLDateCount > 0.
+      // Show one card per assigned department where pendingBLDateCount > 0.
       const pendingBlDepartments = dataArray
-        .filter(item => (item?.pendingBLDateCount || 0) > 0)
+        .filter(item => getNumber(item?.pendingBLDateCount || item?.pendingBL) > 0)
         .map(item => ({
           ...item,
 
           // IMPORTANT: map new API field to old UI field
-          pendingBL: item?.pendingBLDateCount || 0,
+          pendingBL: getNumber(item?.pendingBLDateCount || item?.pendingBL),
 
           customerName: item?.customerName || item?.departmentName || 'Unknown',
           departmentName: item?.departmentName || item?.departmentCode || '-',
           departmentCode: item?.departmentCode || '',
-          totalValue: item?.totalValue || 0,
+          totalValue: getNumber(item?.totalValue),
         }))
         .sort((a, b) => (b?.pendingBL || 0) - (a?.pendingBL || 0));
 
@@ -184,7 +596,7 @@ const BLScreen = () => {
   };
 
   const fetchModalExportData = async item => {
-    const deptCode = item?.departmentCode || '';
+    const deptQueries = getDepartmentQueryValuesFromRow(item);
     const deptName =
       item?.customerName && item?.departmentName
         ? `${item.customerName} • ${item.departmentName}`
@@ -197,21 +609,42 @@ const BLScreen = () => {
     setShowDetailsModal(true);
 
     try {
-      const response = await fetch(getBlListUrl(deptCode, fromDate, toDate), {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-        },
-      });
+      const {profile, authPayload} = await fetchLoggedInUserProfile();
+      const access = buildDepartmentAccess(profile);
+      const queryValues = deptQueries.length
+        ? deptQueries
+        : access.isRestricted
+        ? access.queryValues
+        : [''];
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      if (access.isRestricted && !queryValues.length) {
+        setModalExportData([]);
+        setModalFilteredData([]);
+        return;
       }
 
-      const data = await response.json();
-      const dataArray = normalizeArray(data);
-      const dateFilteredArray = filterBySelectedDates(dataArray);
+      let mergedRows = [];
+
+      for (const queryValue of queryValues) {
+        const response = await fetch(getBlListUrl(queryValue, fromDate, toDate), {
+          method: 'GET',
+          headers: getAuthHeaders(authPayload),
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        const dataArray = normalizeArray(data).filter(row =>
+          rowMatchesDepartmentAccess(row, access),
+        );
+
+        mergedRows = [...mergedRows, ...dataArray];
+      }
+
+      const uniqueRows = removeDuplicateBlDetails(mergedRows);
+      const dateFilteredArray = filterBySelectedDates(uniqueRows);
 
       setModalExportData(dateFilteredArray);
       setModalFilteredData(dateFilteredArray);
@@ -933,7 +1366,7 @@ const BLScreen = () => {
           <View>
             <Text style={styles.sectionTitle}>🚢 B/L Pending Summary</Text>
             <Text style={styles.summaryHeaderSubText}>
-              Overview by active department
+              Overview by assigned department
             </Text>
           </View>
           <View style={styles.summaryHeaderPill}>
@@ -962,7 +1395,7 @@ const BLScreen = () => {
             </View>
             <Text style={styles.statValue}>{totalDepartmentCount}</Text>
             <Text style={styles.statTitle}>Departments</Text>
-            <Text style={styles.statSubLabel}>Departments with pending B/L</Text>
+            <Text style={styles.statSubLabel}>Assigned departments with pending B/L</Text>
           </View>
 
           <View style={[styles.statCardPremium, styles.totalDocsStatCard]}>

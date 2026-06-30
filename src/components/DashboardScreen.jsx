@@ -67,6 +67,18 @@ const DashboardScreen = ({onNavigate, userData}) => {
       return data;
     }
 
+    if (Array.isArray(data?.data)) {
+      return data.data;
+    }
+
+    if (Array.isArray(data?.result)) {
+      return data.result;
+    }
+
+    if (Array.isArray(data?.items)) {
+      return data.items;
+    }
+
     if (data && typeof data === 'object') {
       return [data];
     }
@@ -79,6 +91,13 @@ const DashboardScreen = ({onNavigate, userData}) => {
     return Number.isFinite(numberValue) ? numberValue : 0;
   };
 
+  const sumCountField = (data, fieldName) => {
+    return normalizeArray(data).reduce(
+      (sum, item) => sum + getNumber(item?.[fieldName]),
+      0,
+    );
+  };
+
   const sumTotalValue = data => {
     return normalizeArray(data).reduce(
       (sum, item) =>
@@ -89,6 +108,135 @@ const DashboardScreen = ({onNavigate, userData}) => {
           0),
       0,
     );
+  };
+
+  const normalizeKey = value => String(value ?? '').trim().toLowerCase();
+
+  const getActiveUserData = profileData => profileData || userData || {};
+
+  const getLoggedInUserId = () => {
+    return (
+      userData?.recId ||
+      userData?.userId ||
+      userData?.id ||
+      userData?.profile?.recId ||
+      userData?.profile?.userId ||
+      userData?.user?.recId ||
+      userData?.user?.userId ||
+      null
+    );
+  };
+
+  const getAssignedDepartments = activeUserData => {
+    const currentUser = getActiveUserData(activeUserData);
+
+    return normalizeArray(
+      currentUser?.departments ||
+        currentUser?.department ||
+        currentUser?.profile?.departments ||
+        currentUser?.user?.departments ||
+        currentUser?.assignedDepartments ||
+        [],
+    );
+  };
+
+  const addUniqueText = (list, value) => {
+    const textValue = String(value ?? '').trim();
+    const key = normalizeKey(textValue);
+
+    if (
+      textValue &&
+      key &&
+      key !== '0' &&
+      key !== 'null' &&
+      key !== 'undefined' &&
+      !list.some(item => normalizeKey(item) === key)
+    ) {
+      list.push(textValue);
+    }
+  };
+
+  const getDepartmentApiNames = activeUserData => {
+    const assignedDepartments = getAssignedDepartments(activeUserData);
+    const departmentNames = [];
+
+    assignedDepartments.forEach(department => {
+      // API supports depName. Use departmentCode first because
+      // direct working example is: ?depName=lpp.
+      // Fallback to departmentName when code is missing.
+      const primaryDepartmentName =
+        department?.departmentCode ||
+        department?.deptCode ||
+        department?.depCode ||
+        department?.departmentName ||
+        department?.deptName ||
+        department?.depName ||
+        department?.name ||
+        department?.custDept;
+
+      addUniqueText(departmentNames, primaryDepartmentName);
+    });
+
+    return departmentNames;
+  };
+
+  const buildEndpointWithDepName = (endpoint, depName) => {
+    const separator = endpoint.includes('?') ? '&' : '?';
+    return `${endpoint}${separator}depName=${encodeURIComponent(depName)}`;
+  };
+
+  const fetchEndpointRowsByDepartment = async (
+    endpoint,
+    headers,
+    userProfileData,
+  ) => {
+    const departmentApiNames = getDepartmentApiNames(userProfileData);
+
+    // When user has assigned departments, always call the API with depName.
+    // This is required because endpoints like
+    // Get-Completed-Export-Document-Count?depName=lpp return the correct LPP value,
+    // while the same endpoint without depName may return 0 or non-department rows.
+    if (departmentApiNames.length) {
+      console.log('Dashboard depName filter:', endpoint, departmentApiNames);
+
+      const departmentResponses = await Promise.all(
+        departmentApiNames.map(async depName => {
+          try {
+            const response = await apiClientRef.current.get(
+              buildEndpointWithDepName(endpoint, depName),
+              {headers},
+            );
+
+            return normalizeArray(response.data);
+          } catch (error) {
+            console.error(
+              `Dashboard depName API failed for ${endpoint} depName=${depName}`,
+              error,
+            );
+            return [];
+          }
+        }),
+      );
+
+      return departmentResponses.flat();
+    }
+
+    // No assigned department found. Keep old behavior so Super Admin / system users
+    // without department assignment can still see the default API response.
+    const response = await apiClientRef.current.get(endpoint, {headers});
+    return normalizeArray(response.data);
+  };
+
+  const sumCountFields = (data, fieldNames) => {
+    const fields = Array.isArray(fieldNames) ? fieldNames : [fieldNames];
+
+    return normalizeArray(data).reduce((sum, item) => {
+      const rowValue = fields.reduce((value, fieldName) => {
+        return value || getNumber(item?.[fieldName]);
+      }, 0);
+
+      return sum + rowValue;
+    }, 0);
   };
 
   // Add interceptors only once
@@ -138,314 +286,376 @@ const DashboardScreen = ({onNavigate, userData}) => {
     };
   }, []);
 
-  // Fetch Export Docs Stats
-  const fetchExportDocsStats = useCallback(async () => {
+  const fetchDepartmentMasterData = useCallback(async () => {
     try {
       const headers = {};
       if (userData?.accessToken) {
         headers.Authorization = `Bearer ${userData.accessToken}`;
       }
 
-      // Get packing list count
-      const packingResponse = await apiClientRef.current.get(
-        '/api/Export/Get-Packing-No-Total-count',
+      const response = await apiClientRef.current.get(
+        '/api/Department/get-all-department',
         {headers},
       );
-      const packingData = packingResponse.data;
 
-      // Get completed export count
-      const completedResponse = await apiClientRef.current.get(
-        '/api/Export/Get-Completed-Export-Document-Count',
-        {headers},
-      );
-      const completedData = completedResponse.data;
-
-      // Get pending export count from department-wise API and sum all rows
-      const pendingResponse = await apiClientRef.current.get(
-        '/api/Export/Get-Pending-Export-Document-Count',
-        {headers},
-      );
-      const pendingData = pendingResponse.data;
-
-      const packingCount =
-        Array.isArray(packingData) && packingData.length > 0
-          ? packingData[0].totalPackagingCount || 0
-          : 0;
-
-      const completedCount =
-        Array.isArray(completedData) && completedData.length > 0
-          ? completedData[0].completedExportCount || 0
-          : 0;
-
-      const shipmentValue = sumTotalValue(completedData);
-
-      const pendingCount = Array.isArray(pendingData)
-        ? pendingData.reduce(
-            (sum, item) => sum + (item?.pendingExportCount || 0),
-            0,
-          )
-        : 0;
-
-      if (isMounted.current) {
-        setExportStats(prev => ({
-          ...prev,
-          totalPackagingCount: packingCount,
-          exportCompletedCount: completedCount,
-          exportPendingCount: pendingCount,
-          totalExportCount: completedCount + pendingCount,
-          completedExportCount: completedCount,
-          shipmentValue,
-        }));
-      }
-
-      console.log('Export Docs Stats:', {
-        packingCount,
-        completedCount,
-        pendingCount,
-        shipmentValue,
-        total: completedCount + pendingCount,
-      });
+      return normalizeArray(response.data);
     } catch (error) {
-      console.error('Error fetching export docs stats:', error);
+      console.error('Error fetching department master data:', error);
+      return [];
     }
   }, [userData?.accessToken]);
+
+  const fetchUserProfileData = useCallback(async () => {
+    const profileFromLogin =
+      userData?.profile ||
+      (normalizeArray(userData?.departments).length ? userData : null);
+
+    if (profileFromLogin) {
+      return profileFromLogin;
+    }
+
+    const loggedInUserId = getLoggedInUserId();
+
+    if (!loggedInUserId) {
+      console.warn('Dashboard department access: logged-in user id not found');
+      return userData || {};
+    }
+
+    try {
+      const headers = {};
+      if (userData?.accessToken) {
+        headers.Authorization = `Bearer ${userData.accessToken}`;
+      }
+
+      const response = await apiClientRef.current.get(
+        `/api/User/${loggedInUserId}/profile`,
+        {headers},
+      );
+
+      return response.data || userData || {};
+    } catch (error) {
+      console.error('Error fetching logged-in user profile:', error);
+      return userData || {};
+    }
+  }, [userData]);
+
+  // Fetch Export Docs Stats
+  const fetchExportDocsStats = useCallback(
+    async (userProfileData = null) => {
+      try {
+        const headers = {};
+        if (userData?.accessToken) {
+          headers.Authorization = `Bearer ${userData.accessToken}`;
+        }
+
+        const [packingRows, completedRows, pendingRows] = await Promise.all([
+          fetchEndpointRowsByDepartment(
+            '/api/Export/Get-Packing-No-Total-count',
+            headers,
+            userProfileData,
+          ),
+          fetchEndpointRowsByDepartment(
+            '/api/Export/Get-Completed-Export-Document-Count',
+            headers,
+            userProfileData,
+          ),
+          fetchEndpointRowsByDepartment(
+            '/api/Export/Get-Pending-Export-Document-Count',
+            headers,
+            userProfileData,
+          ),
+        ]);
+
+        const packingCount = sumCountFields(packingRows, [
+          'totalPackagingCount',
+          'totalPackingCount',
+        ]);
+        const completedCount = sumCountFields(completedRows, [
+          'completedExportCount',
+          'completedExpDocument',
+        ]);
+        const shipmentValue = sumTotalValue(completedRows);
+        const pendingCount = sumCountFields(pendingRows, [
+          'pendingExportCount',
+          'pendingExpDocument',
+        ]);
+
+        if (isMounted.current) {
+          setExportStats(prev => ({
+            ...prev,
+            totalPackagingCount: packingCount,
+            exportCompletedCount: completedCount,
+            exportPendingCount: pendingCount,
+            totalExportCount: completedCount + pendingCount,
+            completedExportCount: completedCount,
+            shipmentValue,
+          }));
+        }
+
+        console.log('Department depName Export Docs Stats:', {
+          assignedDepartments: getDepartmentApiNames(userProfileData),
+          packingCount,
+          completedCount,
+          pendingCount,
+          shipmentValue,
+          total: completedCount + pendingCount,
+        });
+      } catch (error) {
+        console.error('Error fetching export docs stats:', error);
+      }
+    },
+    [userData?.accessToken, userData],
+  );
 
   // Fetch B/L Date Stats
-  const fetchBLDateStats = useCallback(async () => {
-    try {
-      const headers = {};
-      if (userData?.accessToken) {
-        headers.Authorization = `Bearer ${userData.accessToken}`;
+  const fetchBLDateStats = useCallback(
+    async (userProfileData = null) => {
+      try {
+        const headers = {};
+        if (userData?.accessToken) {
+          headers.Authorization = `Bearer ${userData.accessToken}`;
+        }
+
+        const [completedRows, pendingRows] = await Promise.all([
+          fetchEndpointRowsByDepartment(
+            '/api/Export/Get-Completed-BL-Date-Count',
+            headers,
+            userProfileData,
+          ),
+          fetchEndpointRowsByDepartment(
+            '/api/Export/Get-Pending-BL-Date-Count',
+            headers,
+            userProfileData,
+          ),
+        ]);
+
+        const completedCount = sumCountFields(completedRows, [
+          'completedBLDateCount',
+          'completedBL',
+        ]);
+        const pendingCount = sumCountFields(pendingRows, [
+          'pendingBLDateCount',
+          'pendingBL',
+        ]);
+
+        if (isMounted.current) {
+          setExportStats(prev => ({
+            ...prev,
+            completedBLDateCount: completedCount,
+            totalPendingBLDate: pendingCount,
+            totalBLDateCount: completedCount + pendingCount,
+          }));
+        }
+
+        console.log('Department depName B/L Date Stats:', {
+          assignedDepartments: getDepartmentApiNames(userProfileData),
+          completedCount,
+          pendingCount,
+          total: completedCount + pendingCount,
+        });
+      } catch (error) {
+        console.error('Error fetching B/L date stats:', error);
       }
-
-      // Get completed BL date count
-      const completedResponse = await apiClientRef.current.get(
-        '/api/Export/Get-Completed-BL-Date-Count',
-        {headers},
-      );
-      const completedData = completedResponse.data;
-
-      // Get pending BL date count from department-wise API and sum all rows
-      const pendingResponse = await apiClientRef.current.get(
-        '/api/Export/Get-Pending-BL-Date-Count',
-        {headers},
-      );
-      const pendingData = pendingResponse.data;
-
-      const completedCount =
-        Array.isArray(completedData) && completedData.length > 0
-          ? completedData[0].completedBLDateCount || 0
-          : 0;
-
-      const pendingCount = Array.isArray(pendingData)
-        ? pendingData.reduce(
-            (sum, item) => sum + (item?.pendingBLDateCount || 0),
-            0,
-          )
-        : 0;
-
-      if (isMounted.current) {
-        setExportStats(prev => ({
-          ...prev,
-          completedBLDateCount: completedCount,
-          totalPendingBLDate: pendingCount,
-          totalBLDateCount: completedCount + pendingCount,
-        }));
-      }
-
-      console.log('B/L Date Stats:', {
-        completedCount,
-        pendingCount,
-        total: completedCount + pendingCount,
-      });
-    } catch (error) {
-      console.error('Error fetching B/L date stats:', error);
-    }
-  }, [userData?.accessToken]);
+    },
+    [userData?.accessToken, userData],
+  );
 
   // Fetch Shipping Stats
-  const fetchShippingStats = useCallback(async () => {
-    try {
-      const headers = {};
-      if (userData?.accessToken) {
-        headers.Authorization = `Bearer ${userData.accessToken}`;
+  const fetchShippingStats = useCallback(
+    async (userProfileData = null) => {
+      try {
+        const headers = {};
+        if (userData?.accessToken) {
+          headers.Authorization = `Bearer ${userData.accessToken}`;
+        }
+
+        const [completedRows, pendingRows] = await Promise.all([
+          fetchEndpointRowsByDepartment(
+            '/api/Export/Get-Completed-Export-Shipping-Date-Count',
+            headers,
+            userProfileData,
+          ),
+          fetchEndpointRowsByDepartment(
+            '/api/Export/Get-Pending-Shipping-Date-Count',
+            headers,
+            userProfileData,
+          ),
+        ]);
+
+        const completedCount = sumCountFields(completedRows, [
+          'completedExportShippingDateCount',
+          'completedShipping',
+        ]);
+        const pendingCount = sumCountFields(pendingRows, [
+          'pendingShippingDateCount',
+          'pendingShipping',
+        ]);
+
+        if (isMounted.current) {
+          setExportStats(prev => ({
+            ...prev,
+            completedExportShippingDateCount: completedCount,
+            pendingShippingDateCount: pendingCount,
+            totalShippingDateCount: completedCount + pendingCount,
+          }));
+        }
+
+        console.log('Department depName Shipping Stats:', {
+          assignedDepartments: getDepartmentApiNames(userProfileData),
+          completedCount,
+          pendingCount,
+          total: completedCount + pendingCount,
+        });
+      } catch (error) {
+        console.error('Error fetching shipping stats:', error);
       }
-
-      // Get completed shipping date count
-      const completedResponse = await apiClientRef.current.get(
-        '/api/Export/Get-Completed-Export-Shipping-Date-Count',
-        {headers},
-      );
-      const completedData = completedResponse.data;
-
-      // Get pending shipping date count from department-wise API and sum all rows
-      const pendingResponse = await apiClientRef.current.get(
-        '/api/Export/Get-Pending-Shipping-Date-Count',
-        {headers},
-      );
-      const pendingData = pendingResponse.data;
-
-      const completedCount =
-        Array.isArray(completedData) && completedData.length > 0
-          ? completedData[0].completedExportShippingDateCount || 0
-          : 0;
-
-      const pendingCount = Array.isArray(pendingData)
-        ? pendingData.reduce(
-            (sum, item) => sum + (item?.pendingShippingDateCount || 0),
-            0,
-          )
-        : 0;
-
-      if (isMounted.current) {
-        setExportStats(prev => ({
-          ...prev,
-          completedExportShippingDateCount: completedCount,
-          pendingShippingDateCount: pendingCount,
-          totalShippingDateCount: completedCount + pendingCount,
-        }));
-      }
-
-      console.log('Shipping Stats:', {
-        completedCount,
-        pendingCount,
-        total: completedCount + pendingCount,
-      });
-    } catch (error) {
-      console.error('Error fetching shipping stats:', error);
-    }
-  }, [userData?.accessToken]);
+    },
+    [userData?.accessToken, userData],
+  );
 
   // Fetch Bank Submit Stats
-  const fetchBankSubmitStats = useCallback(async () => {
-    try {
-      const headers = {};
-      if (userData?.accessToken) {
-        headers.Authorization = `Bearer ${userData.accessToken}`;
+  const fetchBankSubmitStats = useCallback(
+    async (userProfileData = null) => {
+      try {
+        const headers = {};
+        if (userData?.accessToken) {
+          headers.Authorization = `Bearer ${userData.accessToken}`;
+        }
+
+        const [completedRows, pendingRows] = await Promise.all([
+          fetchEndpointRowsByDepartment(
+            '/api/Export/Get-Completed-Bank-Submission-Date-Count',
+            headers,
+            userProfileData,
+          ),
+          fetchEndpointRowsByDepartment(
+            '/api/Export/Get-Pending-Bank-Submission-Date-Count',
+            headers,
+            userProfileData,
+          ),
+        ]);
+
+        const completedCount = sumCountFields(completedRows, [
+          'completedBankSubmissionDateCount',
+          'completedBank',
+        ]);
+        const pendingCount = sumCountFields(pendingRows, [
+          'pendingBankSubmissionDateCount',
+          'pendingBank',
+        ]);
+
+        if (isMounted.current) {
+          setExportStats(prev => ({
+            ...prev,
+            completedBankSubmissionDateCount: completedCount,
+            pendingBankSubmissionDateCount: pendingCount,
+            totalBankSubmissionDateCount: completedCount + pendingCount,
+          }));
+        }
+
+        console.log('Department depName Bank Submit Stats:', {
+          assignedDepartments: getDepartmentApiNames(userProfileData),
+          completedCount,
+          pendingCount,
+          total: completedCount + pendingCount,
+        });
+      } catch (error) {
+        console.error('Error fetching bank submit stats:', error);
       }
-
-      // Get completed bank submission date count
-      const completedResponse = await apiClientRef.current.get(
-        '/api/Export/Get-Completed-Bank-Submission-Date-Count',
-        {headers},
-      );
-      const completedData = completedResponse.data;
-
-      // Get pending bank submission date count from department-wise API and sum all rows
-      const pendingResponse = await apiClientRef.current.get(
-        '/api/Export/Get-Pending-Bank-Submission-Date-Count',
-        {headers},
-      );
-      const pendingData = pendingResponse.data;
-
-      const completedCount =
-        Array.isArray(completedData) && completedData.length > 0
-          ? completedData[0].completedBankSubmissionDateCount || 0
-          : 0;
-
-      const pendingCount = Array.isArray(pendingData)
-        ? pendingData.reduce(
-            (sum, item) => sum + (item?.pendingBankSubmissionDateCount || 0),
-            0,
-          )
-        : 0;
-
-      if (isMounted.current) {
-        setExportStats(prev => ({
-          ...prev,
-          completedBankSubmissionDateCount: completedCount,
-          pendingBankSubmissionDateCount: pendingCount,
-          totalBankSubmissionDateCount: completedCount + pendingCount,
-        }));
-      }
-
-      console.log('Bank Submit Stats:', {
-        completedCount,
-        pendingCount,
-        total: completedCount + pendingCount,
-      });
-    } catch (error) {
-      console.error('Error fetching bank submit stats:', error);
-    }
-  }, [userData?.accessToken]);
+    },
+    [userData?.accessToken, userData],
+  );
 
   // Fetch Realization Stats
-  const fetchRealizationStats = useCallback(async () => {
-    try {
-      const headers = {};
-      if (userData?.accessToken) {
-        headers.Authorization = `Bearer ${userData.accessToken}`;
-      }
+  const fetchRealizationStats = useCallback(
+    async (userProfileData = null) => {
+      try {
+        const headers = {};
+        if (userData?.accessToken) {
+          headers.Authorization = `Bearer ${userData.accessToken}`;
+        }
 
-      const [
-        expectedResponse,
-        realizedResponse,
-        upcomingResponse,
-        overdueResponse,
-      ] = await Promise.all([
-        apiClientRef.current.get(
-          '/api/Export/Get-Pending-Realization-Expected-Date-Count',
-          {headers},
-        ),
-        apiClientRef.current.get(
-          '/api/Export/Get-Completed-Realization-Date-Count',
-          {headers},
-        ),
-        apiClientRef.current.get(
-          '/api/Export/Get-Pending-Realization-Upcomming-Date-Count',
-          {headers},
-        ),
-        apiClientRef.current.get(
-          '/api/Export/Get-Pending-Realization-OverDue-Date-Count',
-          {headers},
-        ),
-      ]);
+        const [expectedRows, realizedRows, upcomingRows, overdueRows] =
+          await Promise.all([
+            fetchEndpointRowsByDepartment(
+              '/api/Export/Get-Pending-Realization-Expected-Date-Count',
+              headers,
+              userProfileData,
+            ),
+            fetchEndpointRowsByDepartment(
+              '/api/Export/Get-Completed-Realization-Date-Count',
+              headers,
+              userProfileData,
+            ),
+            fetchEndpointRowsByDepartment(
+              '/api/Export/Get-Pending-Realization-Upcomming-Date-Count',
+              headers,
+              userProfileData,
+            ),
+            fetchEndpointRowsByDepartment(
+              '/api/Export/Get-Pending-Realization-OverDue-Date-Count',
+              headers,
+              userProfileData,
+            ),
+          ]);
 
-      const expectedValue = sumTotalValue(expectedResponse.data);
-      const realizedValue = sumTotalValue(realizedResponse.data);
-      const upcomingValue = sumTotalValue(upcomingResponse.data);
-      const overdueValue = sumTotalValue(overdueResponse.data);
-      const pendingValue = upcomingValue + overdueValue;
+        const expectedValue = sumTotalValue(expectedRows);
+        const realizedValue = sumTotalValue(realizedRows);
+        const upcomingValue = sumTotalValue(upcomingRows);
+        const overdueValue = sumTotalValue(overdueRows);
+        const pendingValue = upcomingValue + overdueValue;
 
-      const realizedPercent = expectedValue
-        ? Math.min(100, Math.round((realizedValue / expectedValue) * 100))
-        : 0;
+        const realizedPercent = expectedValue
+          ? Math.min(100, Math.round((realizedValue / expectedValue) * 100))
+          : 0;
 
-      if (isMounted.current) {
-        setRealizationStats({
+        if (isMounted.current) {
+          setRealizationStats({
+            expectedValue,
+            realizedValue,
+            pendingValue,
+            upcomingValue,
+            overdueValue,
+            realizedPercent,
+          });
+        }
+
+        console.log('Department depName Realization Stats:', {
+          assignedDepartments: getDepartmentApiNames(userProfileData),
           expectedValue,
           realizedValue,
-          pendingValue,
           upcomingValue,
           overdueValue,
+          pendingValue,
           realizedPercent,
         });
+      } catch (error) {
+        console.error('Error fetching realization stats:', error);
       }
-
-      console.log('Realization Stats:', {
-        expectedValue,
-        realizedValue,
-        upcomingValue,
-        overdueValue,
-        pendingValue,
-        realizedPercent,
-      });
-    } catch (error) {
-      console.error('Error fetching realization stats:', error);
-    }
-  }, [userData?.accessToken]);
+    },
+    [userData?.accessToken, userData],
+  );
 
   // Fetch all dashboard data - wrapped in useCallback with stable dependencies
   const fetchDashboardData = useCallback(async () => {
     setLoading(true);
     try {
-      // Fetch all APIs in parallel for better performance
+      // First load the logged-in user's full profile.
+      // Assigned departments from /api/User/{id}/profile decide every dashboard count.
+      const userProfileData = await fetchUserProfileData();
+
+      // IMPORTANT:
+      // Do not fetch all data and filter on the app side.
+      // The working backend scenario is:
+      // /api/Export/Get-Completed-Export-Document-Count?depName=lpp
+      // /api/Export/Get-Pending-Export-Document-Count?depName=lpp
+      // So every dashboard API is called with depName for each assigned department.
       await Promise.all([
-        fetchExportDocsStats(),
-        fetchBLDateStats(),
-        fetchShippingStats(),
-        fetchBankSubmitStats(),
-        fetchRealizationStats(),
+        fetchExportDocsStats(userProfileData),
+        fetchBLDateStats(userProfileData),
+        fetchShippingStats(userProfileData),
+        fetchBankSubmitStats(userProfileData),
+        fetchRealizationStats(userProfileData),
       ]);
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
@@ -455,6 +665,7 @@ const DashboardScreen = ({onNavigate, userData}) => {
       }
     }
   }, [
+    fetchUserProfileData,
     fetchExportDocsStats,
     fetchBLDateStats,
     fetchShippingStats,
@@ -462,15 +673,16 @@ const DashboardScreen = ({onNavigate, userData}) => {
     fetchRealizationStats,
   ]);
 
-  // Initial load - with proper dependency array
+  // Initial load
   useEffect(() => {
+    isMounted.current = true;
     fetchDashboardData();
 
     // Cleanup function
     return () => {
       isMounted.current = false;
     };
-  }, []); // Empty dependency array - only run once on mount
+  }, [fetchDashboardData]);
 
   const onRefresh = () => {
     setRefreshing(true);

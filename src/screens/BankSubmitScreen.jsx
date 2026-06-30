@@ -11,8 +11,9 @@ import {
   RefreshControl,
   Modal,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const BankSubmitScreen = () => {
+const BankSubmitScreen = ({userData} = {}) => {
   // Original BankSubmitScreen hooks kept first to avoid Fast Refresh hook mismatch.
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -73,6 +74,13 @@ const BankSubmitScreen = () => {
   const [modalItemsPerPage, setModalItemsPerPage] = useState(20);
   const [modalSearchText, setModalSearchText] = useState('');
 
+  const [departmentAccess, setDepartmentAccess] = useState({
+    loaded: false,
+    accessToken: '',
+    departments: [],
+    userProfile: null,
+  });
+
   const API_BASE_URL = 'http://192.168.9.45:7000';
 
   const days = Array.from({length: 31}, (_, i) =>
@@ -84,8 +92,7 @@ const BankSubmitScreen = () => {
   const years = Array.from({length: 11}, (_, i) => String(2025 + i));
 
   useEffect(() => {
-    fetchSummaryStats();
-    fetchBankSummary();
+    initializeBankSubmitScreen();
   }, []);
 
   // Keep modal current page valid after search/data/rows change.
@@ -108,6 +115,18 @@ const BankSubmitScreen = () => {
       return data;
     }
 
+    if (Array.isArray(data?.data)) {
+      return data.data;
+    }
+
+    if (Array.isArray(data?.result)) {
+      return data.result;
+    }
+
+    if (Array.isArray(data?.items)) {
+      return data.items;
+    }
+
     if (data && typeof data === 'object') {
       return [data];
     }
@@ -115,34 +134,414 @@ const BankSubmitScreen = () => {
     return [];
   };
 
-  const fetchSummaryStats = async () => {
+  const getNumber = value => {
+    const numberValue = Number(value || 0);
+    return Number.isFinite(numberValue) ? numberValue : 0;
+  };
+
+  const normalizeText = value => String(value ?? '').trim().toLowerCase();
+
+  const getStoredJsonValue = async key => {
     try {
-      const pendingResponse = await fetch(
-        `${API_BASE_URL}/api/Export/Get-Pending-Bank-Submission-Date-Count`,
+      const value = await AsyncStorage.getItem(key);
+      if (!value) {
+        return null;
+      }
+
+      try {
+        return JSON.parse(value);
+      } catch {
+        return value;
+      }
+    } catch (storageError) {
+      console.error(`AsyncStorage read error for ${key}:`, storageError);
+      return null;
+    }
+  };
+
+  const getAccessTokenFromPayload = payload => {
+    if (!payload) {
+      return '';
+    }
+
+    if (typeof payload === 'string') {
+      return payload;
+    }
+
+    return (
+      payload?.accessToken ||
+      payload?.token ||
+      payload?.jwtToken ||
+      payload?.authToken ||
+      payload?.data?.accessToken ||
+      payload?.data?.token ||
+      payload?.user?.accessToken ||
+      payload?.profile?.accessToken ||
+      ''
+    );
+  };
+
+  const getUserIdFromPayload = payload => {
+    if (!payload || typeof payload === 'string') {
+      return null;
+    }
+
+    return (
+      payload?.recId ||
+      payload?.userId ||
+      payload?.id ||
+      payload?.data?.recId ||
+      payload?.data?.userId ||
+      payload?.data?.id ||
+      payload?.user?.recId ||
+      payload?.user?.userId ||
+      payload?.user?.id ||
+      payload?.profile?.recId ||
+      payload?.profile?.userId ||
+      payload?.profile?.id ||
+      null
+    );
+  };
+
+  const getProfileCandidate = payload => {
+    if (!payload || typeof payload === 'string') {
+      return null;
+    }
+
+    return (
+      payload?.profile ||
+      payload?.userProfile ||
+      payload?.user ||
+      payload?.data?.profile ||
+      payload?.data?.user ||
+      payload?.data ||
+      payload
+    );
+  };
+
+  const getDepartmentsFromProfile = profile => {
+    return normalizeArray(
+      profile?.departments ||
+        profile?.department ||
+        profile?.assignedDepartments ||
+        profile?.userDepartments ||
+        profile?.user?.departments ||
+        profile?.profile?.departments ||
+        [],
+    );
+  };
+
+  const getBuyersFromProfile = profile => {
+    return normalizeArray(
+      profile?.buyers ||
+        profile?.buyer ||
+        profile?.assignedBuyers ||
+        profile?.userBuyers ||
+        profile?.user?.buyers ||
+        profile?.profile?.buyers ||
+        [],
+    );
+  };
+
+  const normalizeDepartmentAccessItem = (department, buyer = null) => {
+    const departmentCode = String(
+      department?.departmentCode ||
+        department?.deptCode ||
+        department?.depCode ||
+        department?.departmentName ||
+        department?.deptName ||
+        department?.name ||
+        '',
+    ).trim();
+    const departmentName = String(
+      department?.departmentName ||
+        department?.deptName ||
+        department?.depName ||
+        department?.departmentCode ||
+        department?.name ||
+        '',
+    ).trim();
+    const buyerName = String(
+      department?.buyerName ||
+        buyer?.buyerName ||
+        department?.customerName ||
+        departmentName ||
+        departmentCode ||
+        '',
+    ).trim();
+    const buyerCode = String(
+      department?.buyerNameCode ||
+        buyer?.buyerNameCode ||
+        department?.customerCode ||
+        buyer?.buyerRecId ||
+        departmentCode ||
+        '',
+    ).trim();
+
+    return {
+      recId: department?.recId || department?.id || department?.departmentId,
+      departmentCode,
+      departmentName,
+      customerName: buyerName || departmentName || departmentCode,
+      customerCode: buyerCode,
+    };
+  };
+
+  const getDepartmentQueryCandidates = department => {
+    const candidates = [
+      department?.departmentCode,
+      department?.departmentName,
+      department?.deptCode,
+      department?.deptName,
+      department?.customerCode,
+      department?.customerName,
+    ];
+
+    const uniqueCandidates = [];
+
+    candidates.forEach(value => {
+      const textValue = String(value || '').trim();
+      if (
+        textValue &&
+        !uniqueCandidates.some(
+          item => item.toLowerCase() === textValue.toLowerCase(),
+        )
+      ) {
+        uniqueCandidates.push(textValue);
+      }
+    });
+
+    return uniqueCandidates;
+  };
+
+  const attachDepartmentFallback = (row, department) => ({
+    ...row,
+    departmentCode:
+      row?.departmentCode || row?.deptCode || department?.departmentCode || '',
+    departmentName:
+      row?.departmentName || row?.deptName || department?.departmentName || department?.departmentCode || '-',
+    customerCode:
+      row?.customerCode || department?.customerCode || department?.departmentCode || '',
+    customerName:
+      row?.customerName || department?.customerName || department?.departmentName || department?.departmentCode || 'Unknown',
+  });
+
+  const getRowsScore = (rows, metricFields = []) => {
+    const metricScore = rows.reduce(
+      (sum, item) =>
+        sum + metricFields.reduce((fieldSum, field) => fieldSum + getNumber(item?.[field]), 0),
+      0,
+    );
+
+    return metricScore > 0 ? metricScore : rows.length;
+  };
+
+  const buildDepartmentUrl = (endpoint, depName) => {
+    const separator = endpoint.includes('?') ? '&' : '?';
+    return `${API_BASE_URL}${endpoint}${separator}depName=${encodeURIComponent(
+      depName || '',
+    )}`;
+  };
+
+  const fetchJson = async (url, accessToken = '') => {
+    const headers = {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    };
+
+    if (accessToken) {
+      headers.Authorization = `Bearer ${accessToken}`;
+    }
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers,
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    return response.json();
+  };
+
+  const fetchDepartmentRows = async (
+    endpoint,
+    department,
+    metricFields = [],
+    accessOverride = departmentAccess,
+  ) => {
+    const candidates = getDepartmentQueryCandidates(department);
+    let bestRows = [];
+    let bestScore = -1;
+
+    for (const depName of candidates) {
+      try {
+        const data = await fetchJson(
+          buildDepartmentUrl(endpoint, depName),
+          accessOverride?.accessToken || '',
+        );
+        const rows = normalizeArray(data).map(row =>
+          attachDepartmentFallback(row, department),
+        );
+        const score = getRowsScore(rows, metricFields);
+
+        if (score > bestScore || (score === bestScore && !bestRows.length)) {
+          bestRows = rows;
+          bestScore = score;
+        }
+      } catch (fetchError) {
+        console.error(`Bank department API error for ${depName}:`, fetchError);
+      }
+    }
+
+    return bestRows;
+  };
+
+  const fetchRowsForAssignedDepartments = async (
+    endpoint,
+    accessOverride,
+    metricFields = [],
+  ) => {
+    const departments = normalizeArray(accessOverride?.departments);
+
+    // IMPORTANT:
+    // If logged-in user has assigned departments, load only those department data.
+    // If logged-in Admin/Super-Admin has no assigned department, keep old behavior
+    // and load ALL data by calling the API without depName.
+    if (!departments.length) {
+      const data = await fetchJson(
+        `${API_BASE_URL}${endpoint}`,
+        accessOverride?.accessToken || '',
       );
-      const pendingData = await pendingResponse.json();
+      return normalizeArray(data);
+    }
 
-      const completedResponse = await fetch(
-        `${API_BASE_URL}/api/Export/Get-Completed-Bank-Submission-Date-Count`,
+    const nestedRows = await Promise.all(
+      departments.map(department =>
+        fetchDepartmentRows(endpoint, department, metricFields, accessOverride),
+      ),
+    );
+
+    return nestedRows.flat();
+  };
+
+  const loadDepartmentAccess = async () => {
+    const storageKeys = [
+      'userData',
+      'userInfo',
+      'user',
+      'authUser',
+      'loginUser',
+      'loggedInUser',
+      'currentUser',
+      'profile',
+      'userProfile',
+      'authData',
+      'loginResponse',
+      'accessToken',
+      'token',
+    ];
+
+    const storedPayloads = [];
+
+    for (const key of storageKeys) {
+      const value = await getStoredJsonValue(key);
+      if (value) {
+        storedPayloads.push(value);
+      }
+    }
+
+    const allPayloads = [userData, ...storedPayloads].filter(Boolean);
+    const accessToken =
+      allPayloads.map(getAccessTokenFromPayload).find(Boolean) || '';
+    const profileFromStorage = allPayloads
+      .map(getProfileCandidate)
+      .find(profile => getDepartmentsFromProfile(profile).length > 0);
+
+    let userProfile = profileFromStorage || null;
+
+    if (!userProfile) {
+      const userId = allPayloads.map(getUserIdFromPayload).find(Boolean);
+
+      if (userId) {
+        try {
+          userProfile = await fetchJson(
+            `${API_BASE_URL}/api/User/${userId}/profile`,
+            accessToken,
+          );
+        } catch (profileError) {
+          console.error('Error fetching logged-in user profile:', profileError);
+        }
+      }
+    }
+
+    const profileDepartments = getDepartmentsFromProfile(userProfile);
+    const profileBuyers = getBuyersFromProfile(userProfile);
+    const firstBuyer = profileBuyers[0] || null;
+
+    const departments = profileDepartments
+      .map(department => normalizeDepartmentAccessItem(department, firstBuyer))
+      .filter(
+        department => department.departmentCode || department.departmentName,
       );
-      const completedData = await completedResponse.json();
 
-      const pendingArray = normalizeArray(pendingData);
-      const completedArray = normalizeArray(completedData);
+    return {
+      loaded: true,
+      accessToken,
+      departments,
+      userProfile,
+    };
+  };
 
-      // New API returns department-wise rows.
-      // Sum all pending bank counts and total values.
+  const initializeBankSubmitScreen = async () => {
+    const access = await loadDepartmentAccess();
+    setDepartmentAccess(access);
+    await Promise.all([fetchSummaryStats(access), fetchBankSummary(access)]);
+  };
+
+  const fetchSummaryStats = async (accessOverride = departmentAccess) => {
+    try {
+      const activeAccess = accessOverride?.loaded
+        ? accessOverride
+        : await loadDepartmentAccess();
+
+      const [pendingArray, completedArray] = await Promise.all([
+        fetchRowsForAssignedDepartments(
+          '/api/Export/Get-Pending-Bank-Submission-Date-Count',
+          activeAccess,
+          [
+            'pendingBankSubmissionDateCount',
+            'pendingBank',
+            'totalValue',
+            'totalExportValue',
+            'pendingValue',
+          ],
+        ),
+        fetchRowsForAssignedDepartments(
+          '/api/Export/Get-Completed-Bank-Submission-Date-Count',
+          activeAccess,
+          [
+            'completedBankSubmissionDateCount',
+            'completedBank',
+            'totalPackagingCount',
+          ],
+        ),
+      ]);
+
       const pendingCount = pendingArray.reduce(
-        (sum, item) => sum + (item?.pendingBankSubmissionDateCount || 0),
+        (sum, item) =>
+          sum +
+          getNumber(item?.pendingBankSubmissionDateCount || item?.pendingBank),
         0,
       );
 
       const totalValue = pendingArray.reduce(
         (sum, item) =>
           sum +
-          (item?.totalValue ||
-            item?.totalExportValue ||
-            item?.pendingValue ||
+          (getNumber(item?.totalValue) ||
+            getNumber(item?.totalExportValue) ||
+            getNumber(item?.pendingValue) ||
             0),
         0,
       );
@@ -150,9 +549,9 @@ const BankSubmitScreen = () => {
       const completedCount = completedArray.reduce(
         (sum, item) =>
           sum +
-          (item?.completedBankSubmissionDateCount ||
-            item?.completedBank ||
-            item?.totalPackagingCount ||
+          (getNumber(item?.completedBankSubmissionDateCount) ||
+            getNumber(item?.completedBank) ||
+            getNumber(item?.totalPackagingCount) ||
             0),
         0,
       );
@@ -174,43 +573,39 @@ const BankSubmitScreen = () => {
     }
   };
 
-  const fetchBankSummary = async () => {
+  const fetchBankSummary = async (accessOverride = departmentAccess) => {
     setBankLoading(true);
     setError('');
 
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/Export/Get-Pending-Bank-Submission-Date-Count`,
-        {
-          method: 'GET',
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-          },
-        },
+      const activeAccess = accessOverride?.loaded
+        ? accessOverride
+        : await loadDepartmentAccess();
+
+      const dataArray = await fetchRowsForAssignedDepartments(
+        '/api/Export/Get-Pending-Bank-Submission-Date-Count',
+        activeAccess,
+        [
+          'pendingBankSubmissionDateCount',
+          'pendingBank',
+          'totalValue',
+          'totalExportValue',
+          'pendingValue',
+        ],
       );
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      const dataArray = normalizeArray(data);
-
-      // New API returns department-wise bank pending rows.
-      // Show one card per department where pendingBankSubmissionDateCount > 0.
+      // Department access rule:
+      // Assigned departments: only data returned by assigned depName API calls can show here.
+      // No assigned departments: API is called without depName, so Admin sees all previous data.
       const pendingBankDepartments = dataArray
-        .filter(item => (item?.pendingBankSubmissionDateCount || 0) > 0)
+        .filter(item => getNumber(item?.pendingBankSubmissionDateCount) > 0)
         .map(item => ({
           ...item,
-
-          // IMPORTANT: map new API field to old UI field
-          pendingBank: item?.pendingBankSubmissionDateCount || 0,
-
+          pendingBank: getNumber(item?.pendingBankSubmissionDateCount),
           customerName: item?.customerName || item?.departmentName || 'Unknown',
           departmentName: item?.departmentName || item?.departmentCode || '-',
           departmentCode: item?.departmentCode || '',
-          totalValue: item?.totalValue || 0,
+          totalValue: getNumber(item?.totalValue),
         }))
         .sort((a, b) => (b?.pendingBank || 0) - (a?.pendingBank || 0));
 
@@ -350,37 +745,28 @@ const BankSubmitScreen = () => {
     );
   };
 
-  const fetchModalBankData = async (deptCode, deptName) => {
+  const fetchModalBankData = async item => {
     setModalLoading(true);
     setModalSearchText('');
 
     try {
-      let url = `${API_BASE_URL}/api/Export/Get-By-Dept-Bank-Submission-Date-List?depName=${encodeURIComponent(
-        deptCode || '',
-      )}`;
-
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      const dataArray = normalizeArray(data);
-      const pendingRows = dataArray.filter(item => !item?.bankSubmissionDate);
+      const activeAccess = departmentAccess?.loaded
+        ? departmentAccess
+        : await loadDepartmentAccess();
+      const dataArray = await fetchDepartmentRows(
+        '/api/Export/Get-By-Dept-Bank-Submission-Date-List',
+        item,
+        ['totalValue', 'noOfPcs', 'noOfCarton'],
+        activeAccess,
+      );
+      const pendingRows = dataArray.filter(row => !row?.bankSubmissionDate);
       const rowsForModal = pendingRows.length > 0 ? pendingRows : dataArray;
       const dateFilteredData = filterBySelectedDates(rowsForModal);
 
       setModalBankData(dateFilteredData);
       setModalFilteredData(dateFilteredData);
       setModalCurrentPage(1);
-      setModalDepartmentName(deptName || 'Unknown Department');
+      setModalDepartmentName(getFullDisplayName(item));
     } catch (fetchError) {
       console.error('Bank modal fetch error:', fetchError);
       setModalBankData([]);
@@ -394,7 +780,7 @@ const BankSubmitScreen = () => {
   const handleCardClick = async item => {
     setModalDepartmentName(getFullDisplayName(item));
     setShowDetailsModal(true);
-    await fetchModalBankData(item?.departmentCode, getFullDisplayName(item));
+    await fetchModalBankData(item);
   };
 
   const handleModalSearch = text => {
@@ -566,11 +952,25 @@ const BankSubmitScreen = () => {
 
   const hasActiveFilters = () => fromDate !== '' || toDate !== '';
 
-  const onRefresh = () => {
+  const onRefresh = async () => {
     setRefreshing(true);
-    Promise.all([fetchSummaryStats(), fetchBankSummary()]).finally(() => {
+
+    try {
+      const activeAccess = departmentAccess?.loaded
+        ? departmentAccess
+        : await loadDepartmentAccess();
+
+      if (!departmentAccess?.loaded) {
+        setDepartmentAccess(activeAccess);
+      }
+
+      await Promise.all([
+        fetchSummaryStats(activeAccess),
+        fetchBankSummary(activeAccess),
+      ]);
+    } finally {
       setRefreshing(false);
-    });
+    }
   };
 
   const getBankPageNumbers = () => {
